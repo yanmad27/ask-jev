@@ -85,20 +85,34 @@ test("buildState: user_past_choices puts same-cwd entries first", async () => {
   assert.equal(state.user_past_choices.choices[0].question, "Q-same");
 });
 
-test("ask-jev-answer.mjs: PostToolUse AskUserQuestion payload logs a user_choice event", async () => {
-  const logFile = join(mkdtempSync(join(tmpdir(), "ctx-answer-log-")), "jev.log");
+async function runAnswerHook(toolResponse, logFile) {
   const script = join(repoRoot, "hooks", "ask-jev-answer.mjs");
-  const input = {
-    tool_name: "AskUserQuestion", session_id: "sess-1", cwd: "/repo",
-    tool_input: { questions: [{ question: "Merge now?", options: [{ label: "yes", description: "merge" }, { label: "no", description: "wait" }] }] },
-    tool_response: { "Merge now?": { answer: "yes" } },
-  };
+  const input = { tool_name: "AskUserQuestion", session_id: "sess-1", cwd: "/repo", tool_response: toolResponse };
   const child = execFileAsync("node", [script], { env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", JEV_LOG_FILE: logFile }, encoding: "utf8" });
   child.child.stdin.end(JSON.stringify(input));
   await child;
-  const uc = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).find((e) => e.kind === "user_choice");
-  assert.ok(uc, "user_choice event logged");
-  assert.equal(uc.question, "Merge now?");
-  assert.deepEqual(uc.chosen, ["yes"]);
-  assert.deepEqual(uc.options, ["yes", "no"]);
+}
+
+test("ask-jev-answer.mjs: parses real AskUserQuestion tool_response strings, ignores everything else", async () => {
+  const logFile = join(mkdtempSync(join(tmpdir(), "ctx-answer-log-")), "jev.log");
+  const positive1 = 'Your questions have been answered: "Enforce \\"definition bắt buộc\\" ở đâu?"="Hook enforce + README (Recommended)". You can now continue with these answers in mind.';
+  const positive2 = 'The user answered: "Where is the logo file on disk? (...)"="~/Downloads/....jpg". Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say.';
+  const negativeOwnDeny = 'Jev answered on the user\'s behalf from conversation context. Do NOT ask again — use these choices and continue:\n"Which option?" → A (Jev: 0.91)';
+  const negativeCanceled = "Tool permission request failed: ... canceled";
+  const negativeAnswerProse = "Answer: the user wants to proceed with option B, do not ask again";
+
+  for (const s of [positive1, positive2, negativeOwnDeny, negativeCanceled, negativeAnswerProse]) {
+    await runAnswerHook(s, logFile);
+  }
+
+  const events = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "user_choice");
+  assert.equal(events.length, 2, "only the two real answer strings produce user_choice events");
+
+  assert.equal(events[0].question, 'Enforce "definition bắt buộc" ở đâu?');
+  assert.deepEqual(events[0].chosen, ["Hook enforce + README (Recommended)"]);
+  assert.equal(events[0].kind_of_answer, "option");
+
+  assert.equal(events[1].question, "Where is the logo file on disk? (...)");
+  assert.deepEqual(events[1].chosen, ["~/Downloads/....jpg"]);
+  assert.equal(events[1].kind_of_answer, "free_text");
 });

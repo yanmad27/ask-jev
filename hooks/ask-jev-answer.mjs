@@ -3,34 +3,40 @@
 import { apiKey, logEvent } from "../lib/jev.mjs";
 import { readStdinJson, truncate } from "../lib/gate.mjs";
 
-// Shape thật của tool_response cho AskUserQuestion chưa xác nhận được (không có trong docs
-// công khai lẫn strings của binary CLI) — thử vài dạng hợp lý; không khớp thì ghi debug để
-// soi sau thay vì âm thầm mất evidence. Xoá dòng debug khi đã xác nhận được shape thật.
-function extractChoices(r) {
-  const rows = Array.isArray(r) ? r
-    : r && typeof r === "object" ? Object.entries(r).map(([q, a]) => ({ question: q, ...(a && typeof a === "object" ? a : { answer: a }) }))
-    : [];
-  return rows
-    .map((x) => ({ question: x.question ?? x.header ?? "", chosen: [].concat(x.answer ?? x.answers ?? x.selectedOptions ?? x.selected ?? []).filter(Boolean).map(String) }))
-    .filter((x) => x.question || x.chosen.length > 0);
+// tool_response thật là string, xác nhận từ transcript thật trên máy — hai dạng Claude Code
+// tự viết. "Your questions have been answered" = chọn option; "The user answered" = gõ tự do
+// (vd chọn "Other"). Không khớp prefix nào (deny của chính mình, permission bị huỷ, …) thì bỏ qua.
+const PREFIXES = [
+  { re: /^Your questions have been answered:/, kind: "option" },
+  { re: /^The user answered:/, kind: "free_text" },
+];
+const unescape = (s) => s.replace(/\\(.)/g, "$1");
+
+function responseText(r) {
+  if (typeof r === "string") return r;
+  if (r && typeof r === "object") return typeof r.content === "string" ? r.content : typeof r.text === "string" ? r.text : "";
+  return "";
+}
+
+function extractChoices(raw) {
+  const text = responseText(raw);
+  const prefix = PREFIXES.find((p) => p.re.test(text));
+  if (!prefix) return [];
+  const out = [];
+  const pair = /"((?:[^"\\]|\\.)*)"="((?:[^"\\]|\\.)*)"/g;
+  let m;
+  while ((m = pair.exec(text))) out.push({ question: unescape(m[1]), chosen: [unescape(m[2])], kind_of_answer: prefix.kind });
+  return out;
 }
 
 function main() {
   if (!apiKey()) return;
   const input = readStdinJson();
   if (!input || input.tool_name !== "AskUserQuestion") return;
-  const questions = input.tool_input?.questions ?? [];
-  const choices = extractChoices(input.tool_response);
-  if (choices.length === 0) {
-    logEvent({ kind: "debug", note: "AskUserQuestion tool_response shape unrecognized", sample: truncate(JSON.stringify(input.tool_response ?? null), 500) });
-    return;
-  }
-
-  for (const c of choices) {
-    const q = questions.find((qq) => qq.question === c.question);
+  for (const c of extractChoices(input.tool_response)) {
     logEvent({
       kind: "user_choice", session_id: input.session_id, cwd: input.cwd,
-      question: truncate(c.question, 120), options: (q?.options ?? []).map((o) => o.label), chosen: c.chosen,
+      question: truncate(c.question, 120), chosen: c.chosen, kind_of_answer: c.kind_of_answer,
     });
   }
 }
