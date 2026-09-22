@@ -56,18 +56,26 @@ const bashInput = { tool_name: "Bash", transcript_path: transcript, cwd: process
 const stopInput = { session_id: `stop-${Math.random()}`, transcript_path: transcript, cwd: process.cwd(), last_assistant_message: "done" };
 const promptInput = { session_id: "x", prompt: "please refactor the auth module completely", transcript_path: transcript, cwd: process.cwd() };
 
-test("permission gate: allow on p=0.95, ask on p=0.1, silent on p=0.5; decision log has label/confidence/reason", async () => {
-  for (const [p, decision] of [[0.95, "allow"], [0.1, "ask"], [0.5, null]]) {
-    const server = await stub({ safe: { probability: p } });
+test("permission gate: allow on p=0.95, ask on p=0.1, ask on p=0.5 (no more silent 'unsure'); decision log has label/confidence/reason", async () => {
+  for (const [p, decision] of [[0.95, "allow"], [0.1, "ask"], [0.5, "ask"]]) {
+    const server = await stub({ safe: { probability: p }, destructive: { probability: 0.1 } });
     const out = await runGate("permission", editInput, `http://127.0.0.1:${server.address().port}`);
     server.close();
-    if (decision) assert.match(out, new RegExp(`"permissionDecision":"${decision}"`));
-    else assert.equal(out, "");
+    assert.match(out, new RegExp(`"permissionDecision":"${decision}"`));
   }
   const d = lastDecision("permission");
   assertDecisionShape(d);
   assert.match(d.question, /^Edit /);
-  assert.equal(d.label, "safe"); // last iteration ran p=0.5, and p>=0.5 leans "safe"
+});
+
+test("permission gate: destructive=0.7 always blocks allow, even with safe=0.95, both modes (security fix)", async () => {
+  for (const mode of ["safe", "full"]) {
+    const server = await stub({ safe: { probability: 0.95 }, destructive: { probability: 0.7 } });
+    const { stdout } = await runGateFull("permission", editInput, `http://127.0.0.1:${server.address().port}`, "permission", undefined, mode);
+    server.close();
+    assert.doesNotMatch(stdout, /"permissionDecision":"allow"/);
+    assert.match(stdout, /"permissionDecision":"ask"/);
+  }
 });
 
 test("stop gate: blocks with top-level decision on p(incomplete)=0.9, skips when stop_hook_active; decision log populated", async () => {

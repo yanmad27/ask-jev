@@ -90,15 +90,15 @@ test("prompt gate (full): never emits an 'ask' instruction, only proceed/assume"
   }
 });
 
-test("permission: allows at 0.85 in full (threshold 0.8), not in safe (threshold 0.9)", async () => {
+test("permission: safe=0.85 destructive=0.1 allows in full (threshold 0.8), asks in safe (threshold 0.9, below it regardless of low destructive)", async () => {
   const input = { tool_name: "Edit", transcript_path: transcript, cwd: process.cwd(), tool_input: { file_path: "a.js" } };
-  const fullServer = await dynamicStub(() => ({ safe: { probability: 0.85 } }));
+  const fullServer = await dynamicStub(() => ({ safe: { probability: 0.85 }, destructive: { probability: 0.1 } }));
   const fullOut = await run("gates/permission.mjs", input, `http://127.0.0.1:${fullServer.address().port}`, "full");
   fullServer.close();
   assert.match(fullOut, /"permissionDecision":"allow"/);
 
-  const safeServer = await dynamicStub((keys) => (keys.includes("safe") ? { safe: { probability: 0.85 } } : { destructive: { probability: 0.5 } }));
+  const safeServer = await dynamicStub(() => ({ safe: { probability: 0.85 }, destructive: { probability: 0.1 } }));
   const safeOut = await run("gates/permission.mjs", input, `http://127.0.0.1:${safeServer.address().port}`, "safe");
   safeServer.close();
-  assert.doesNotMatch(safeOut, /"permissionDecision":"allow"/);
+  assert.match(safeOut, /"permissionDecision":"ask"/);
 });
