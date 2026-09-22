@@ -24,6 +24,20 @@ function stub(answers) {
   return new Promise((r) => server.listen(0, "127.0.0.1", () => r(server)));
 }
 
+// Đếm request thật để chứng minh fast path không gọi mạng, không chỉ trả lời đúng.
+function countingStub(answers) {
+  let count = 0;
+  const server = createServer((req, res) => {
+    count++;
+    req.on("data", () => {});
+    req.on("end", () => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ answers }));
+    });
+  });
+  return new Promise((r) => server.listen(0, "127.0.0.1", () => r({ server, count: () => count })));
+}
+
 // Mặc định "safe" — bộ test này viết cho hành vi trước autonomy; autonomy.test.mjs tự
 // override "full" cho từng test cần.
 async function runGateFull(name, input, url, gates = name, cwd, mode = "safe") {
@@ -76,6 +90,37 @@ test("permission gate: destructive=0.7 always blocks allow, even with safe=0.95,
     assert.doesNotMatch(stdout, /"permissionDecision":"allow"/);
     assert.match(stdout, /"permissionDecision":"ask"/);
   }
+});
+
+test("permission gate: fast path allows Read and mcp__paseo__list_workspaces with zero gateway calls", async () => {
+  const { server, count } = await countingStub({ safe: { probability: 0.99 }, destructive: { probability: 0.01 } });
+  const url = `http://127.0.0.1:${server.address().port}`;
+  for (const toolName of ["Read", "mcp__paseo__list_workspaces"]) {
+    const input = { tool_name: toolName, transcript_path: transcript, cwd: process.cwd(), tool_input: {} };
+    const out = await runGate("permission", input, url);
+    assert.match(out, /"permissionDecision":"allow"/);
+  }
+  server.close();
+  assert.equal(count(), 0, "fast path must not call the gateway");
+  const d = lastDecision("permission");
+  assert.equal(d.outcome, "allow");
+  assert.equal(d.reason, "read-only tool");
+});
+
+test("permission gate: Bash rm -rf ~/x (non-scratch path) still asks", async () => {
+  const server = await stub({ safe: { probability: 0.9 }, destructive: { probability: 0.75 } });
+  const input = { tool_name: "Bash", transcript_path: transcript, cwd: process.cwd(), tool_input: { command: "rm -rf ~/x" } };
+  const out = await runGate("permission", input, `http://127.0.0.1:${server.address().port}`);
+  server.close();
+  assert.match(out, /"permissionDecision":"ask"/);
+});
+
+test("permission gate: Bash git push origin feat/x allows at safe=0.9 destructive=0.1", async () => {
+  const server = await stub({ safe: { probability: 0.9 }, destructive: { probability: 0.1 } });
+  const input = { tool_name: "Bash", transcript_path: transcript, cwd: process.cwd(), tool_input: { command: "git push origin feat/x" } };
+  const out = await runGate("permission", input, `http://127.0.0.1:${server.address().port}`);
+  server.close();
+  assert.match(out, /"permissionDecision":"allow"/);
 });
 
 test("stop gate: blocks with top-level decision on p(incomplete)=0.9, skips when stop_hook_active; decision log populated", async () => {

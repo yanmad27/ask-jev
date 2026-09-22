@@ -202,10 +202,39 @@ individually with `ASK_JEV_GATES` (comma list; `ASK_JEV_GATES=` disables all fou
 
 | Gate | Fires on | Jev judges | Effect |
 |---|---|---|---|
-| `permission` | `PreToolUse` (Bash/Edit/Write/MultiEdit/NotebookEdit) | Is this safe to run without asking? | `p ≥ ASK_JEV_ALLOW_THRESHOLD` → auto-allow; `p ≤ 0.2` → force an ask; in between, a second `destructive` check decides allow-or-ask (no silent "unsure" bucket) |
+| `permission` | `PreToolUse` (every tool — matcher `*`) | Is this safe to run without asking? | A static read-only allowlist (`Read`, `Grep`, `Glob`, `LS`, `WebSearch`, `WebFetch`, `list_`/`get_`/`read_`/`search_`/`inspect_`/`capture_`-style MCP calls, …) auto-allows with **zero network calls**. Everything else asks Jev both `safe` and `destructive` together: `p(destructive) ≥ 0.6` always forces an ask; else `p(safe) ≥ ASK_JEV_ALLOW_THRESHOLD` and `p(destructive) < 0.3` → auto-allow; otherwise ask (no silent "unsure" bucket) |
 | `stop` | `Stop` | Did the assistant stop with work still owed? | `p ≥ 0.85` → blocks with a reason. In [full autonomy](#4-autonomy), also resolves a trailing "should I…?" on the user's behalf |
 | `bash` | `PostToolUse` (Bash) | success / error / tests_failed / needs_attention | Non-`success` at `p ≥ 0.8` adds one line of context for Claude |
 | `prompt` | `UserPromptSubmit` | Is the prompt ambiguous? (skipped under 12 chars or starting with `/`) | Safe mode: a clarify-with-the-user warning at `p ≥ 0.85`. [Full autonomy](#4-autonomy): never asks — proceeds on the literal reading or states an assumption |
+
+The read-only fast path and the `destructive` criteria live in `lib/gate.mjs`,
+shared between the `permission` hook and `bin/jev-eval.mjs`, so a replay uses
+the exact same rules a real decision would. `AskUserQuestion` never reaches
+this gate — it has its own hook (section 1).
+
+**What counts as destructive.** Irreversible loss or exposure — no undo, no
+way to get the data or trust back:
+
+- Deleting or overwriting a file outside both the workspace and scratch
+  dirs (`/tmp`, `$TMPDIR`, `~/.cache`, `~/.paseo/worktrees`, git
+  worktrees), or `rm -rf` on a non-scratch path
+- `git push --force`/`--force-with-lease`, rewriting shared history, or
+  pushing directly to `main`/`master`/another protected branch
+- Deleting a remote branch or tag
+- `npm publish`/`paseo plugin install` from an untrusted source,
+  deploying, paying, or emailing/messaging a third party
+- Printing or exfiltrating a secret or key, or dropping a database
+- Editing `~/.ssh`, `~/.claude/settings*.json`, or a shell rc file
+
+Reversible, so **not** destructive:
+
+- Writes inside the workspace or a scratch dir
+- `git commit`/`branch`/`checkout`/`merge`/`rebase` of local branches
+- `git push` to a feature branch
+- `gh pr create`/`edit`/`checks`/`merge --squash` (a merge only lands once
+  CI and branch protection allow it)
+- Reads or network GETs
+- A `sleep`/polling loop
 
 **What Jev is shown.** Every gate — and the `AskUserQuestion` hook from
 section 1 — builds the same structured `state` (`lib/context.mjs`), aiming
@@ -277,11 +306,9 @@ timeout means the gate is silent — never a blocker.
 behavior (Jev only ever auto-*answers* on your behalf, never proceeds past a
 question or a stop on its own).
 
-One guardrail never turns off, in either mode: a `destructive` boolean —
-"would this destroy or expose something that cannot be undone: delete files
-outside the workspace, drop data, force-push/rewrite shared history,
-publish/deploy/pay/send to third parties, leak secrets" — and `p ≥ 0.6`
-always hands the decision to you, full autonomy or not.
+One guardrail never turns off, in either mode: a `destructive` boolean — see
+["what counts as destructive"](#3-automatic-gates) — and `p ≥ 0.6` always
+hands the decision to you, full autonomy or not.
 
 What changes in `full`:
 

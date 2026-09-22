@@ -199,10 +199,39 @@ quyết định cần hỏi. Cả bốn bật sẵn, tắt riêng từng cái b�
 
 | Gate | Chạy lúc | Jev phán | Kết quả |
 |---|---|---|---|
-| `permission` | `PreToolUse` (Bash/Edit/Write/MultiEdit/NotebookEdit) | Việc này chạy không cần hỏi có an toàn không? | `p ≥ ASK_JEV_ALLOW_THRESHOLD` → tự allow; `p ≤ 0.2` → ép hỏi lại; ở giữa, hỏi thêm `destructive` để quyết allow hay ask (không còn bucket "unsure" im lặng) |
+| `permission` | `PreToolUse` (mọi tool — matcher `*`) | Việc này chạy không cần hỏi có an toàn không? | Allowlist tĩnh cho tool đọc-only (`Read`, `Grep`, `Glob`, `LS`, `WebSearch`, `WebFetch`, MCP dạng `list_`/`get_`/`read_`/`search_`/`inspect_`/`capture_`, …) tự allow ngay, **không gọi mạng**. Còn lại hỏi Jev cả `safe` lẫn `destructive` cùng lúc: `p(destructive) ≥ 0.6` luôn ép hỏi lại; nếu không thì `p(safe) ≥ ASK_JEV_ALLOW_THRESHOLD` và `p(destructive) < 0.3` → tự allow; còn lại hỏi lại (không còn bucket "unsure" im lặng) |
 | `stop` | `Stop` | Claude dừng khi việc còn dang dở không? | `p ≥ 0.85` → chặn dừng kèm lý do. Ở [tự trị full](#4-tự-trị), còn tự trả lời thay nếu câu cuối hỏi xin phép |
 | `bash` | `PostToolUse` (Bash) | success / error / tests_failed / needs_attention | Không phải `success` với `p ≥ 0.8` → gắn thêm một dòng ngữ cảnh cho Claude |
 | `prompt` | `UserPromptSubmit` | Prompt có mập mờ không? (bỏ qua nếu dưới 12 ký tự hoặc bắt đầu bằng `/`) | Safe: cảnh báo hỏi lại người dùng nếu `p ≥ 0.85`. [Tự trị full](#4-tự-trị): không bao giờ hỏi — chạy theo nghĩa đen hoặc nêu giả định rồi làm luôn |
+
+Fast path đọc-only và tiêu chí `destructive` nằm chung ở `lib/gate.mjs`,
+dùng chung giữa hook `permission` và `bin/jev-eval.mjs`, nên chấm lại
+(replay) dùng đúng luật y hệt một quyết định thật. `AskUserQuestion` không
+bao giờ đi qua gate này — nó có hook riêng (mục 1).
+
+**Thế nào là destructive.** Mất mát hay lộ thông tin không thể hoàn tác —
+không undo, không lấy lại được dữ liệu hay lòng tin:
+
+- Xoá hoặc ghi đè file ngoài CẢ workspace lẫn scratch dir (`/tmp`,
+  `$TMPDIR`, `~/.cache`, `~/.paseo/worktrees`, git worktree), hoặc `rm -rf`
+  trên đường dẫn không phải scratch
+- `git push --force`/`--force-with-lease`, viết lại lịch sử chung, hoặc
+  push thẳng vào `main`/`master`/branch được bảo vệ khác
+- Xoá remote branch hoặc tag
+- `npm publish`/`paseo plugin install` từ nguồn không tin cậy, deploy, trả
+  tiền, hoặc gửi email/tin nhắn cho bên thứ ba
+- In ra hoặc làm lộ secret/key, hoặc xoá database
+- Sửa `~/.ssh`, `~/.claude/settings*.json`, hoặc file rc của shell
+
+Có thể hoàn tác nên **không** destructive:
+
+- Ghi trong workspace hoặc scratch dir
+- `git commit`/`branch`/`checkout`/`merge`/`rebase` branch local
+- `git push` lên feature branch
+- `gh pr create`/`edit`/`checks`/`merge --squash` (merge chỉ thật sự xảy ra
+  khi CI và branch protection cho phép)
+- Đọc hoặc network GET
+- Vòng lặp `sleep`/polling
 
 **Jev thấy gì.** Mỗi gate — và cả hook `AskUserQuestion` ở mục 1 — dựng
 cùng một `state` có cấu trúc (`lib/context.mjs`), nhắm tới thứ một người
@@ -274,11 +303,9 @@ timeout đều khiến gate im lặng — không bao giờ chặn bạn.
 chỉ bao giờ tự *trả lời* thay bạn, không bao giờ tự chạy tiếp qua một câu
 hỏi hay một lần dừng).
 
-Một guardrail không bao giờ tắt, ở cả hai mode: boolean `destructive` —
-"việc này có phá huỷ hay để lộ thứ không thể hoàn tác không: xoá file ngoài
-workspace, mất dữ liệu, force-push/viết lại lịch sử chung, publish/deploy/
-trả tiền/gửi cho bên thứ ba, lộ secret" — và `p ≥ 0.6` luôn đưa quyết định
-về tay bạn, dù full autonomy hay không.
+Một guardrail không bao giờ tắt, ở cả hai mode: boolean `destructive` — xem
+["thế nào là destructive"](#3-cổng-tự-động) — và `p ≥ 0.6` luôn đưa quyết
+định về tay bạn, dù full autonomy hay không.
 
 Full thay đổi gì:
 

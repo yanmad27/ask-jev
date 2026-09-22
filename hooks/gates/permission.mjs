@@ -1,44 +1,32 @@
 #!/usr/bin/env node
-/** PreToolUse: Jev chỉ tự allow khi VỪA safe VỪA không destructive; mọi trường hợp khác → ask. */
-import { readFileSync } from "node:fs";
+/** PreToolUse: fast-allow tool đọc-only tĩnh trước (không gọi Jev), còn lại hỏi Jev cả safe lẫn destructive cùng lúc. */
 import { apiKey, askJev, logEvent } from "../../lib/jev.mjs";
 import { buildState, hasContext } from "../../lib/context.mjs";
-import { enabled, readStdinJson, FOCUS, truncate, autonomy, DESTRUCTIVE } from "../../lib/gate.mjs";
+import {
+  enabled, readStdinJson, FOCUS, autonomy, DESTRUCTIVE, SAFE, decidePermission, isReadOnlyFastPath, subject, beforeAfter,
+} from "../../lib/gate.mjs";
 import { env } from "../../lib/env.mjs";
-
-const SAFE = { true: "Read-only, or a reversible edit scoped inside the workspace, in service of the current task",
-  false: "Deletes/overwrites outside the workspace, force-push, rm -rf, secrets exfiltration, network writes, pushing to a remote (even non-force), package publish, or anything else irreversible" };
-
-function subject(input) {
-  const ti = input.tool_input ?? {};
-  return truncate((input.tool_name === "Bash" ? ti.command : `${input.tool_name} ${ti.file_path ?? ti.notebook_path ?? ""}`) ?? "", 120);
-}
-
-/** Edit/Write/MultiEdit: nội dung thật trước/sau, không chỉ đường dẫn — Jev thấy đúng thay đổi. */
-function beforeAfter(input) {
-  const ti = input.tool_input ?? {};
-  if (input.tool_name === "Write") {
-    let before = "";
-    try { before = readFileSync(ti.file_path, "utf8"); } catch {}
-    return { before: truncate(before, 4_000), after: truncate(ti.content ?? "", 4_000) };
-  }
-  if (input.tool_name === "Edit") return { before: truncate(ti.old_string ?? "", 4_000), after: truncate(ti.new_string ?? "", 4_000) };
-  if (input.tool_name === "MultiEdit") {
-    const edits = ti.edits ?? [];
-    return { before: truncate(edits.map((e) => e.old_string).join("\n---\n"), 4_000), after: truncate(edits.map((e) => e.new_string).join("\n---\n"), 4_000) };
-  }
-  return {};
-}
 
 function respond(decision, reason) {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: decision, permissionDecisionReason: reason } }));
 }
 
+function logDecision(input, extra) {
+  logEvent({ kind: "decision", source: "hook", gate: "permission", session_id: input.session_id, question: subject(input), ...extra });
+}
+
 async function main() {
   if (!enabled("permission")) return;
   const input = readStdinJson();
-  if (!input || !/^(Bash|Edit|Write|MultiEdit|NotebookEdit)$/.test(input.tool_name ?? "")) return;
+  // matcher "*" nay bắt mọi tool; AskUserQuestion có hook riêng (ask-jev.mjs) nên tự loại ở đây.
+  if (!input || !input.tool_name || input.tool_name === "AskUserQuestion") return;
   if (input.permission_mode === "bypassPermissions") return; // đã tự allow hết rồi, hỏi Jev vô ích
+
+  if (isReadOnlyFastPath(input.tool_name)) {
+    logDecision(input, { label: "safe", confidence: 1, outcome: "allow", reason: "read-only tool" });
+    respond("allow", "Jev: read-only tool, fast-allowed without a network call.");
+    return;
+  }
 
   const mode = autonomy();
   const allowThreshold = Number(env("ALLOW_THRESHOLD", mode === "full" ? 0.8 : 0.9));
@@ -49,33 +37,17 @@ async function main() {
   });
   if (!hasContext(state)) return;
 
-  // destructive hỏi CÙNG lúc với safe — fast-allow trước đây chỉ hỏi safe, bỏ qua destructive: lỗ hổng.
   const answers = await askJev(key, state, {
     safe: { type: "boolean", instructions: { question: "Is this action safe to run without asking the user?", focus: FOCUS }, criteria: SAFE },
     destructive: { type: "boolean", instructions: { question: "Would this action be destructive or irreversible?", focus: FOCUS }, criteria: DESTRUCTIVE },
   }, "gate:permission", 4000, sizes).catch(() => null);
   if (!answers) return;
+
   const p = answers.safe?.probability;
   const dp = answers.destructive?.probability;
-  const base = { kind: "decision", source: "hook", gate: "permission", session_id: input.session_id, question: subject(input) };
-
-  // Sàn cứng, kiểm TRƯỚC, cả hai mode — autonomy chỉ chỉnh làn nhanh, không đụng vào đây.
-  if (dp === undefined || dp >= 0.6) {
-    logEvent({ ...base, label: "destructive", confidence: dp ?? 1, outcome: "ask", reason: truncate(DESTRUCTIVE.true, 160) });
-    respond("ask", `Jev: possibly destructive (p=${dp?.toFixed(2) ?? "?"}) — ask the user first.`);
-    return;
-  }
-
-  if (p !== undefined && p >= allowThreshold && dp < 0.3) {
-    logEvent({ ...base, label: "safe", confidence: p, outcome: "allow", reason: truncate(SAFE.true, 160) });
-    respond("allow", `Jev: safe (${p.toFixed(2)}), not destructive (${dp.toFixed(2)})`);
-    return;
-  }
-
-  // Mọi trường hợp còn lại — kể cả safe mode dưới threshold của nó dù destructive thấp — ask.
-  const label = p === undefined ? "unsure" : p >= 0.5 ? "safe" : "risky";
-  logEvent({ ...base, label, confidence: p ?? 1 - dp, outcome: "ask", reason: truncate(SAFE.false, 160) });
-  respond("ask", `Jev: safe=${p?.toFixed(2) ?? "?"} destructive=${dp.toFixed(2)} — ask the user first.`);
+  const result = decidePermission(p, dp, allowThreshold);
+  logDecision(input, { label: result.label, confidence: result.confidence, outcome: result.decision, reason: result.reason });
+  respond(result.decision, `Jev: safe=${p?.toFixed(2) ?? "?"} destructive=${dp?.toFixed(2) ?? "?"} — ${result.decision === "allow" ? "auto-allowed" : "ask the user first"}.`);
 }
 
 main().catch(() => {});
