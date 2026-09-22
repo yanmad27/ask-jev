@@ -126,3 +126,37 @@ test("lib/stats.mjs: computeStats reports per-gate positive/fallback rates", () 
   // fallback: ask/personal (non-answered) + permission/ask = 2 of 6
   assert.equal(s.decisions.fallback_pct, (2 / 6) * 100);
 });
+
+test("lib/jev.mjs: askJev retries once on a 5xx gateway response, logs retried:true", async () => {
+  let calls = 0;
+  const server = createServer((req, res) => {
+    req.on("data", () => {});
+    req.on("end", () => {
+      calls++;
+      if (calls === 1) {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: { message: "Service temporarily unavailable" } }));
+      } else {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ answers: { ok: { probability: 0.5 } } }));
+      }
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const script = "import('./lib/jev.mjs').then(async ({askJev}) => { "
+    + "const a = await askJev('dummy', {x:1}, {ok:{type:'boolean',instructions:{question:'q',focus:'f'},criteria:{true:'t',false:'f'}}}, 'test', 2000); "
+    + "process.stdout.write(JSON.stringify(a)); });";
+  const { stdout } = await execFileAsync("node", ["-e", script], {
+    env: { ...process.env, JEV_GATEWAY_URL: url, JEV_LOG_FILE: logFile },
+    encoding: "utf8",
+  });
+  server.close();
+  assert.equal(calls, 2);
+  assert.deepEqual(JSON.parse(stdout), { ok: { probability: 0.5 } });
+
+  const call = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l))
+    .filter((e) => e.kind === "call" && e.source === "test").at(-1);
+  assert.equal(call.status, "ok");
+  assert.equal(call.retried, true);
+});
