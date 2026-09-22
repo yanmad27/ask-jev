@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/yanmad27/ask-jev/compare/v0.7.0...v1.0.0) (2026-09-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* prefer ASK_JEV_* env names; JEV_* remain as deprecated aliases.
+
+### Features
+
+* env vars renamed JEV_* -&gt; ASK_JEV_* (legacy names still read) ([#17](https://github.com/yanmad27/ask-jev/issues/17)) ([eb22a1d](https://github.com/yanmad27/ask-jev/commit/eb22a1d4290e00d28fbb9d8eccf86bef05551503))
+
 ## [0.7.0](https://github.com/yanmad27/ask-jev/compare/v0.6.0...v0.7.0) (2026-09-22)
 
 
