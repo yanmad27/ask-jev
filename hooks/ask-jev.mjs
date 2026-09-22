@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { apiKey, askJev, logEvent } from "../lib/jev.mjs";
 import { buildState, hasContext } from "../lib/context.mjs";
+import { truncate } from "../lib/gate.mjs";
 
 /**
  * hooks.json và self-register.mjs (xem file đó) có thể cùng đăng ký hook này, nên
@@ -41,7 +42,7 @@ function isDuplicate(input) {
 const THRESHOLD = Number(process.env.JEV_ASK_THRESHOLD ?? 0.8);
 
 function logDecision(question, options, outcome, extra = {}) {
-  logEvent({ kind: "decision", source: "hook", question, options: options.map((o) => o.label), outcome, ...extra });
+  logEvent({ kind: "decision", source: "hook", gate: "ask", question, options: options.map((o) => o.label), outcome, ...extra });
 }
 
 /**
@@ -114,8 +115,10 @@ async function decide(key, { question, options, context }) {
     return null;
   }
 
-  const label = options[Number.parseInt(answers.pick.choice.slice(1), 10)]?.label;
-  logDecision(question, options, "answered", { label, confidence });
+  const picked = options[Number.parseInt(answers.pick.choice.slice(1), 10)];
+  const label = picked?.label;
+  const reason = truncate(picked?.description ?? "", 160);
+  logDecision(question, options, "answered", { label, confidence, reason });
   return { label, confidence };
 }
 
@@ -154,6 +157,7 @@ async function decideMulti(key, { question, options, context }) {
   }
 
   const selected = [];
+  const reasons = [];
   let confidence = 1;
   for (let i = 0; i < options.length; i++) {
     const p = answers[`o${i}`]?.probability;
@@ -163,6 +167,7 @@ async function decideMulti(key, { question, options, context }) {
     }
     if (p >= THRESHOLD) {
       selected.push(options[i].label);
+      reasons.push(options[i].description);
       confidence = Math.min(confidence, p);
     } else if (p <= 1 - THRESHOLD) {
       confidence = Math.min(confidence, 1 - p);
@@ -173,7 +178,8 @@ async function decideMulti(key, { question, options, context }) {
   }
 
   const label = selected.length > 0 ? selected.join(", ") : "none";
-  logDecision(question, options, "answered", { label, confidence });
+  const reason = truncate(reasons.length > 0 ? reasons.join("; ") : "no option applied", 160);
+  logDecision(question, options, "answered", { label, confidence, reason });
   return { label, confidence };
 }
 
@@ -189,7 +195,7 @@ async function main() {
 
   const key = apiKey();
   if (!key) {
-    logEvent({ kind: "decision", source: "hook", outcome: "no_key" });
+    logEvent({ kind: "decision", source: "hook", gate: "ask", outcome: "no_key" });
     return;
   }
 
@@ -227,7 +233,7 @@ async function main() {
 
   const context = buildState({ transcriptPath: input.transcript_path ?? "", cwd: input.cwd });
   if (!hasContext(context)) {
-    logEvent({ kind: "decision", source: "hook", outcome: "no_context" });
+    logEvent({ kind: "decision", source: "hook", gate: "ask", outcome: "no_context" });
     return;
   }
 

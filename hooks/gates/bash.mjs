@@ -2,7 +2,7 @@
 /** PostToolUse (Bash): Jev gắn thêm ngữ cảnh khi lệnh không "success" thẳng thớm. */
 import { apiKey, askJev, logEvent } from "../../lib/jev.mjs";
 import { buildState, hasContext } from "../../lib/context.mjs";
-import { enabled, readStdinJson, tailText, FOCUS } from "../../lib/gate.mjs";
+import { enabled, readStdinJson, tailText, truncate, FOCUS } from "../../lib/gate.mjs";
 
 // tool_response chưa có schema chốt trong docs — chấp cả string lẫn object {stdout|output|content}.
 function responseText(r) {
@@ -37,7 +37,11 @@ async function main() {
 
   const choice = answers.result.choice;
   const p = answers.result.probabilities?.[choice] ?? 1;
-  logEvent({ kind: "decision", source: "hook", gate: "bash", outcome: choice, question: input.tool_input?.command, probability: p });
+  logEvent({
+    kind: "decision", source: "hook", gate: "bash", outcome: choice,
+    question: truncate(input.tool_input?.command ?? "", 120),
+    label: choice, confidence: p, reason: truncate(opts[choice]?.what ?? "", 160),
+  });
   if (choice !== "success" && p >= 0.8) {
     const summary = output.trim().split("\n").pop() ?? "";
     process.stdout.write(JSON.stringify({

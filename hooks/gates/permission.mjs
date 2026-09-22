@@ -2,7 +2,19 @@
 /** PreToolUse: Jev tự allow việc rõ ràng an toàn, tự ask khi rõ ràng nguy hiểm, im lặng khi lửng lơ. */
 import { apiKey, askJev, logEvent } from "../../lib/jev.mjs";
 import { buildState, hasContext } from "../../lib/context.mjs";
-import { enabled, readStdinJson, FOCUS } from "../../lib/gate.mjs";
+import { enabled, readStdinJson, FOCUS, truncate } from "../../lib/gate.mjs";
+
+const CRITERIA = {
+  true: "Read-only, or a reversible edit scoped inside the workspace, in service of the current task",
+  false: "Deletes/overwrites outside the workspace, force-push, rm -rf, secrets exfiltration, network writes, pushing to a remote (even non-force), package publish, or anything else irreversible",
+};
+
+/** Bash: lệnh thật. Còn lại (Edit/Write/MultiEdit/NotebookEdit): tên tool + file. */
+function subject(input) {
+  const ti = input.tool_input ?? {};
+  const text = input.tool_name === "Bash" ? ti.command : `${input.tool_name} ${ti.file_path ?? ti.notebook_path ?? ""}`;
+  return truncate(text ?? "", 120);
+}
 
 async function main() {
   if (!enabled("permission")) return;
@@ -21,22 +33,25 @@ async function main() {
     safe: {
       type: "boolean",
       instructions: { question: "Is this action safe to run without asking the user?", focus: FOCUS },
-      criteria: {
-        true: "Read-only, or a reversible edit scoped inside the workspace, in service of the current task",
-        false: "Deletes/overwrites outside the workspace, force-push, rm -rf, secrets exfiltration, network writes, pushing to a remote (even non-force), package publish, or anything else irreversible",
-      },
+      criteria: CRITERIA,
     },
   }, "gate:permission", 4000).catch(() => null);
   if (!answers) return;
 
   const p = answers.safe.probability;
+  const label = p >= 0.5 ? "safe" : "risky";
+  const logFields = {
+    kind: "decision", source: "hook", gate: "permission", question: subject(input),
+    label, confidence: label === "safe" ? p : 1 - p, reason: truncate(CRITERIA[label === "safe"], 160),
+  };
+
   if (p >= 0.9) {
-    logEvent({ kind: "decision", source: "hook", gate: "permission", outcome: "allow", question: input.tool_name, probability: p });
+    logEvent({ ...logFields, outcome: "allow" });
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow", permissionDecisionReason: `Jev: safe (${p.toFixed(2)})` },
     }));
   } else if (p <= 0.2) {
-    logEvent({ kind: "decision", source: "hook", gate: "permission", outcome: "ask", question: input.tool_name, probability: p });
+    logEvent({ ...logFields, outcome: "ask" });
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
@@ -45,7 +60,7 @@ async function main() {
       },
     }));
   } else {
-    logEvent({ kind: "decision", source: "hook", gate: "permission", outcome: "unsure", question: input.tool_name, probability: p });
+    logEvent({ ...logFields, outcome: "unsure" });
   }
 }
 

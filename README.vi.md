@@ -212,8 +212,10 @@ timeout đều khiến gate im lặng — không bao giờ chặn bạn.
 
 Mỗi lần gọi gateway và mỗi quyết định của hook được ghi thành một dòng JSON
 vào `~/.claude/ask-jev.log` (đổi đường dẫn bằng `JEV_LOG_FILE`, tắt hẳn bằng
-`JEV_LOG=0`). Chỉ ghi nội dung câu hỏi và nhãn các lựa chọn — không bao giờ
-ghi transcript hội thoại hay payload `state` gửi cho Jev.
+`JEV_LOG=0`). Mỗi dòng quyết định mang theo `gate` nào tạo ra nó (`ask`,
+`permission`, `stop`, `bash`, `prompt`), đáp án của Jev dạng `label` +
+`confidence`, và một `reason` ngắn — đúng phần tiêu chí Jev khớp — không bao
+giờ ghi transcript hội thoại hay payload `state` gửi cho Jev.
 
 Xem bằng:
 
@@ -222,19 +224,32 @@ node ~/.claude/plugins/marketplaces/ask-jev/bin/jev.mjs stats
 ```
 
 ```
-Calls: 12 (ok 11, error 1)
-Latency: avg 412ms, p95 780ms
+Calls: 19 (ok 18, error 1)
+Latency: avg 512ms, p95 910ms
+Jev decided: 63.2%  Fell back to user: 15.8%
 
 Decisions by outcome:
-  answered              7  58.3%
-  low_confidence         3  25.0%
-  personal               2  16.7%
+  answered               7  36.8%
+  allow                  4  21.1%
+  success                3  15.8%
+  low_confidence         2  10.5%
+  personal               1   5.3%
+  ask                    1   5.3%
+  tests_failed           1   5.3%
+
+By gate:
+  ask          calls   10  positive  70.0%  answered 7, low_confidence 2, personal 1
+  permission   calls    5  positive  80.0%  allow 4, ask 1
+  bash         calls    4  positive  75.0%  success 3, tests_failed 1
 
 Recent decisions:
   2026-09-22T10:03:11.000Z  answered           Is this a bug or a feature?    bug (0.91)
+  2026-09-22T10:02:47.000Z  allow              rm dist/old-build.js           safe (0.97)
 ```
 
 Thu hẹp khoảng thời gian bằng `--last N` hoặc `--since 7d|24h`, thêm `--json` để lấy số liệu thô thay vì báo cáo dạng text.
+
+`decisions.by_gate` chia đúng những con số đó theo từng gate — `{ total, positive, by_outcome }` — vì mỗi gate định nghĩa "positive" khác nhau (một quyết định `ask` mà Jev trả lời thẳng, một `permission` mà Jev tự allow, một lần chạy `bash` Jev chấm `success`, …). "Fell back to user" chỉ đếm đúng hai trường hợp câu hỏi/permission thực sự quay lại tay bạn: một câu `ask` không được trả lời, hoặc một `permission` gate ép phải hỏi.
 
 **Lưu ý:** `${CLAUDE_PLUGIN_ROOT}` chỉ có sẵn bên trong hooks/skills của Claude Code; để gọi CLI từ terminal, dùng `~/.claude/plugins/marketplaces/ask-jev/bin/jev.mjs` hoặc alias `jev`.
 
@@ -245,8 +260,10 @@ cáo ở trên) và `jev:log` (`tail -f` file log). Mở chúng từ panel scrip
 Paseo để xem số liệu sử dụng mà không cần rời khỏi app.
 
 Muốn dashboard sống động hơn một script, cài [Paseo plugin](paseo-plugin/README.md)
-— một workspace panel với ô số liệu, phân bố outcome, và bảng quyết định cập
-nhật liên tục. Settings → Plugins → dán vào ô "Plugin source" → Install:
+— một workspace panel với ô số liệu, bộ lọc theo gate cạnh phân bố outcome, và
+bảng quyết định cập nhật liên tục (Time, Gate, Outcome, Question/Subject,
+Answer, Reason — chạm vào một dòng để mở rộng câu hỏi/reason bị cắt ngắn).
+Settings → Plugins → dán vào ô "Plugin source" → Install:
 
 ```
 github:yanmad27/ask-jev:paseo-plugin

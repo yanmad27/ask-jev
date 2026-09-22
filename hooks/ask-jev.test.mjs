@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { writeFileSync, readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseEvents, filterSince, sinceMsFromSpec, recentDecisions } from "../lib/stats.mjs";
+import { parseEvents, filterSince, sinceMsFromSpec, recentDecisions, computeStats } from "../lib/stats.mjs";
 
 const execFileAsync = promisify(execFile);
 const transcript = join(mkdtempSync(join(tmpdir(), "askjev-")), "t.jsonl");
@@ -105,4 +105,24 @@ test("lib/stats.mjs: malformed lines skipped, --since filters, recentDecisions c
   const lastOne = recentDecisions(events, 1);
   assert.equal(lastOne.length, 1);
   assert.equal(lastOne[0].question, "New2?");
+});
+
+test("lib/stats.mjs: computeStats reports per-gate positive/fallback rates", () => {
+  const events = [
+    { kind: "decision", gate: "ask", outcome: "answered" },
+    { kind: "decision", gate: "ask", outcome: "personal" },
+    { kind: "decision", gate: "permission", outcome: "allow" },
+    { kind: "decision", gate: "permission", outcome: "ask" },
+    { kind: "decision", gate: "bash", outcome: "success" },
+    { kind: "decision", gate: "bash", outcome: "tests_failed" },
+  ];
+  const s = computeStats(events);
+  assert.equal(s.decisions.total, 6);
+  assert.deepEqual(s.decisions.by_gate.ask, { total: 2, positive: 1, by_outcome: { answered: 1, personal: 1 } });
+  assert.deepEqual(s.decisions.by_gate.permission, { total: 2, positive: 1, by_outcome: { allow: 1, ask: 1 } });
+  assert.deepEqual(s.decisions.by_gate.bash, { total: 2, positive: 1, by_outcome: { success: 1, tests_failed: 1 } });
+  // positive: ask/answered, permission/allow, bash/success = 3 of 6
+  assert.equal(s.decisions.positive_pct, 50);
+  // fallback: ask/personal (non-answered) + permission/ask = 2 of 6
+  assert.equal(s.decisions.fallback_pct, (2 / 6) * 100);
 });

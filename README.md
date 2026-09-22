@@ -216,8 +216,10 @@ timeout means the gate is silent — never a blocker.
 
 Every gateway call and every hook decision is appended as one JSON line to
 `~/.claude/ask-jev.log` (override the path with `JEV_LOG_FILE`, disable
-entirely with `JEV_LOG=0`). Only the question text and option labels are
-recorded — never the conversation transcript or the `state` payload sent to
+entirely with `JEV_LOG=0`). Each decision line carries which `gate` produced
+it (`ask`, `permission`, `stop`, `bash`, `prompt`), Jev's answer as a
+`label` + `confidence`, and a short `reason` — the criterion text Jev
+matched, never the conversation transcript or the `state` payload sent to
 Jev.
 
 Inspect it with:
@@ -227,19 +229,32 @@ node ~/.claude/plugins/marketplaces/ask-jev/bin/jev.mjs stats
 ```
 
 ```
-Calls: 12 (ok 11, error 1)
-Latency: avg 412ms, p95 780ms
+Calls: 19 (ok 18, error 1)
+Latency: avg 512ms, p95 910ms
+Jev decided: 63.2%  Fell back to user: 15.8%
 
 Decisions by outcome:
-  answered              7  58.3%
-  low_confidence         3  25.0%
-  personal               2  16.7%
+  answered               7  36.8%
+  allow                  4  21.1%
+  success                3  15.8%
+  low_confidence         2  10.5%
+  personal               1   5.3%
+  ask                    1   5.3%
+  tests_failed           1   5.3%
+
+By gate:
+  ask          calls   10  positive  70.0%  answered 7, low_confidence 2, personal 1
+  permission   calls    5  positive  80.0%  allow 4, ask 1
+  bash         calls    4  positive  75.0%  success 3, tests_failed 1
 
 Recent decisions:
   2026-09-22T10:03:11.000Z  answered           Is this a bug or a feature?    bug (0.91)
+  2026-09-22T10:02:47.000Z  allow              rm dist/old-build.js           safe (0.97)
 ```
 
 Narrow the window with `--last N` or `--since 7d|24h`, or add `--json` to get the raw aggregates instead of the text report.
+
+`decisions.by_gate` breaks the same numbers down per gate — `{ total, positive, by_outcome }` — since each gate defines "positive" differently (an `ask` decision Jev answered outright, a `permission` decision Jev auto-allowed, a `bash` run Jev judged `success`, …). "Fell back to user" only counts the two cases where a question or permission prompt actually reached you: an unanswered `ask` question, or a `permission` gate that forced an `ask`.
 
 **Note:** `${CLAUDE_PLUGIN_ROOT}` is available inside Claude Code hooks/skills; for manual CLI calls from your terminal, use `~/.claude/plugins/marketplaces/ask-jev/bin/jev.mjs` or the `jev` alias.
 
@@ -251,8 +266,10 @@ Paseo's scripts panel to view usage without leaving the app.
 
 For a live dashboard instead of a script, install the
 [Paseo plugin](paseo-plugin/README.md) — a workspace panel with stat tiles,
-an outcome breakdown, and a live-updating decisions table. Settings → Plugins
-→ paste into "Plugin source" → Install:
+a gate filter alongside the outcome breakdown, and a live-updating decisions
+table (Time, Gate, Outcome, Question/Subject, Answer, Reason — tap a row to
+expand a truncated question or reason). Settings → Plugins → paste into
+"Plugin source" → Install:
 
 ```
 github:yanmad27/ask-jev:paseo-plugin

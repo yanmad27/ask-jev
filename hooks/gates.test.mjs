@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFileSync, mkdtempSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,12 +38,23 @@ async function runGate(name, input, url, gates = name) {
   return (await runGateFull(name, input, url, gates)).stdout;
 }
 
+function lastDecision(gate) {
+  const lines = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  return lines.filter((e) => e.kind === "decision" && e.gate === gate).at(-1);
+}
+function assertDecisionShape(d) {
+  assert.ok(typeof d.question === "string" && d.question.length > 0, "question populated");
+  assert.ok(typeof d.label === "string" && d.label.length > 0, "label populated");
+  assert.ok(typeof d.confidence === "number", "confidence populated");
+  assert.ok(typeof d.reason === "string" && d.reason.length > 0, "reason populated");
+}
+
 const editInput = { tool_name: "Edit", transcript_path: transcript, cwd: process.cwd(), tool_input: { file_path: "a.js" } };
 const bashInput = { tool_name: "Bash", transcript_path: transcript, cwd: process.cwd(), tool_input: { command: "npm test" }, tool_response: "1 failing\n" };
 const stopInput = { session_id: `stop-${Math.random()}`, transcript_path: transcript, cwd: process.cwd(), last_assistant_message: "done" };
 const promptInput = { session_id: "x", prompt: "please refactor the auth module completely", transcript_path: transcript, cwd: process.cwd() };
 
-test("permission gate: allow on p=0.95, ask on p=0.1, silent on p=0.5", async () => {
+test("permission gate: allow on p=0.95, ask on p=0.1, silent on p=0.5; decision log has label/confidence/reason", async () => {
   for (const [p, decision] of [[0.95, "allow"], [0.1, "ask"], [0.5, null]]) {
     const server = await stub({ safe: { probability: p } });
     const out = await runGate("permission", editInput, `http://127.0.0.1:${server.address().port}`);
@@ -51,9 +62,13 @@ test("permission gate: allow on p=0.95, ask on p=0.1, silent on p=0.5", async ()
     if (decision) assert.match(out, new RegExp(`"permissionDecision":"${decision}"`));
     else assert.equal(out, "");
   }
+  const d = lastDecision("permission");
+  assertDecisionShape(d);
+  assert.match(d.question, /^Edit /);
+  assert.equal(d.label, "safe"); // last iteration ran p=0.5, and p>=0.5 leans "safe"
 });
 
-test("stop gate: blocks with top-level decision on p(incomplete)=0.9, skips when stop_hook_active", async () => {
+test("stop gate: blocks with top-level decision on p(incomplete)=0.9, skips when stop_hook_active; decision log populated", async () => {
   const server = await stub({ incomplete: { probability: 0.9 } });
   const url = `http://127.0.0.1:${server.address().port}`;
   const out = JSON.parse(await runGate("stop", stopInput, url));
@@ -62,13 +77,37 @@ test("stop gate: blocks with top-level decision on p(incomplete)=0.9, skips when
   const skipped = await runGate("stop", { ...stopInput, stop_hook_active: true }, url);
   server.close();
   assert.equal(skipped, "");
+
+  const d = lastDecision("stop");
+  assertDecisionShape(d);
+  assert.equal(d.question, "done");
+  assert.equal(d.label, "incomplete");
+  assert.ok(d.confidence > 0.5);
 });
 
-test("bash gate: emits additionalContext for tests_failed", async () => {
+test("bash gate: emits additionalContext for tests_failed; decision log populated", async () => {
   const server = await stub({ result: { choice: "tests_failed", probabilities: { tests_failed: 0.9 } } });
   const out = await runGate("bash", bashInput, `http://127.0.0.1:${server.address().port}`);
   server.close();
   assert.match(out, /Jev: tests_failed/);
+
+  const d = lastDecision("bash");
+  assertDecisionShape(d);
+  assert.equal(d.question, "npm test");
+  assert.equal(d.label, "tests_failed");
+  assert.equal(d.confidence, 0.9);
+});
+
+test("prompt gate: ambiguity warning at p=0.9; decision log populated", async () => {
+  const server = await stub({ ambiguous: { probability: 0.9 } });
+  const out = await runGate("prompt", { ...promptInput, session_id: "y" }, `http://127.0.0.1:${server.address().port}`);
+  server.close();
+  assert.match(out, /Jev: this request reads as ambiguous/);
+
+  const d = lastDecision("prompt");
+  assertDecisionShape(d);
+  assert.equal(d.question, promptInput.prompt);
+  assert.equal(d.label, "ambiguous");
 });
 
 test("all four gates emit nothing when JEV_GATES= is empty", async () => {

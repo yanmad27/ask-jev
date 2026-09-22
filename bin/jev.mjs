@@ -35,11 +35,18 @@ function stats(args) {
   }
 
   process.stdout.write(`Calls: ${summary.calls.total} (ok ${summary.calls.ok}, error ${summary.calls.error})\n`);
-  process.stdout.write(`Latency: avg ${summary.calls.avg_latency_ms}ms, p95 ${summary.calls.p95_latency_ms}ms\n\n`);
+  process.stdout.write(`Latency: avg ${summary.calls.avg_latency_ms}ms, p95 ${summary.calls.p95_latency_ms}ms\n`);
+  process.stdout.write(`Jev decided: ${summary.decisions.positive_pct.toFixed(1)}%  Fell back to user: ${summary.decisions.fallback_pct.toFixed(1)}%\n\n`);
   process.stdout.write("Decisions by outcome:\n");
   for (const [outcome, count] of Object.entries(summary.decisions.by_outcome)) {
     const pct = summary.decisions.total ? ((count / summary.decisions.total) * 100).toFixed(1) : "0.0";
     process.stdout.write(`  ${outcome.padEnd(20)} ${String(count).padStart(4)}  ${pct}%\n`);
+  }
+  process.stdout.write("\nBy gate:\n");
+  for (const [gate, g] of Object.entries(summary.decisions.by_gate)) {
+    const pct = g.total ? ((g.positive / g.total) * 100).toFixed(1) : "0.0";
+    const top = Object.entries(g.by_outcome).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([o, c]) => `${o} ${c}`).join(", ");
+    process.stdout.write(`  ${gate.padEnd(12)} calls ${String(g.total).padStart(4)}  positive ${pct.padStart(5)}%  ${top}\n`);
   }
   process.stdout.write("\nRecent decisions:\n");
   for (const d of recentDecisions(events, 10)) {

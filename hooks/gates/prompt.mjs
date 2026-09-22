@@ -3,10 +3,14 @@
 import { fileURLToPath } from "node:url";
 import { apiKey, askJev, logEvent } from "../../lib/jev.mjs";
 import { buildState, hasContext } from "../../lib/context.mjs";
-import { enabled, readStdinJson, FOCUS } from "../../lib/gate.mjs";
+import { enabled, readStdinJson, FOCUS, truncate } from "../../lib/gate.mjs";
 
 const jevPath = fileURLToPath(new URL("../../bin/jev.mjs", import.meta.url));
 const REMINDER = `Reminder: before classifying / choosing among options / yes-no on evidence, ask Jev: echo '<json>' | node "${jevPath}" (skill ask-jev). Personal taste or irreversible actions → ask the user.`;
+const CRITERIA = {
+  true: "Multiple materially different readings that would change the work",
+  false: "Clear, or trivially disambiguated by the conversation so far",
+};
 
 async function ambiguityWarning(input) {
   if (!enabled("prompt")) return null;
@@ -19,21 +23,19 @@ async function ambiguityWarning(input) {
   const answers = await askJev(apiKey(), state, {
     ambiguous: {
       type: "boolean",
-      instructions: {
-        question: "Does the latest prompt read as ambiguous?",
-        focus: FOCUS,
-      },
-      criteria: {
-        true: "Multiple materially different readings that would change the work",
-        false: "Clear, or trivially disambiguated by the conversation so far",
-      },
+      instructions: { question: "Does the latest prompt read as ambiguous?", focus: FOCUS },
+      criteria: CRITERIA,
     },
   }, "gate:prompt", 4000).catch(() => null);
   if (!answers) return null;
 
   const p = answers.ambiguous.probability;
-  logEvent({ kind: "decision", source: "hook", gate: "prompt", outcome: p >= 0.85 ? "ambiguous" : "clear", probability: p });
-  return p >= 0.85 ? "Jev: this request reads as ambiguous — ask one clarifying question before acting." : null;
+  const label = p >= 0.85 ? "ambiguous" : "clear";
+  logEvent({
+    kind: "decision", source: "hook", gate: "prompt", outcome: label,
+    question: truncate(prompt, 120), label, confidence: label === "ambiguous" ? p : 1 - p, reason: truncate(CRITERIA[label === "ambiguous"], 160),
+  });
+  return label === "ambiguous" ? "Jev: this request reads as ambiguous — ask one clarifying question before acting." : null;
 }
 
 async function main() {
