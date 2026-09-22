@@ -23,6 +23,7 @@ interface StatsSummary {
     positive_pct: number;
     fallback_pct: number;
   };
+  user_overrides: number;
 }
 
 interface LogEvent {
@@ -65,6 +66,7 @@ function emptyStats(path: string): JevStats {
     hasLog: false,
     calls: { total: 0, ok: 0, error: 0, avg_latency_ms: 0, p95_latency_ms: 0 },
     decisions: { total: 0, by_outcome: {}, by_gate: {}, positive_pct: 0, fallback_pct: 0 },
+    user_overrides: 0,
     recent: [],
   };
 }
@@ -88,6 +90,7 @@ export function getStats({ since, outcome, gate }: RpcInput<typeof jevStatsRpc>)
     hasLog: true,
     calls: summary.calls,
     decisions: summary.decisions,
+    user_overrides: summary.user_overrides,
     recent: recent.map((d) => ({
       ts: d.ts,
       gate: d.gate,

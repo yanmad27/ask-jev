@@ -39,7 +39,7 @@ const opts = [{ label: "A", description: "a" }, { label: "B", description: "b" }
 
 test("partial answers: resolved question denies, unresolved re-asked", async () => {
   const server = await stub(({ state, questions }) => (questions.pick
-    ? { pick: { choice: "o0", probabilities: { o0: state.pendingQuestion === "Resolved?" ? 0.95 : 0.5 } }, personal: { probability: 0.1 } }
+    ? { pick: { choice: "o0", probabilities: { o0: state.pendingQuestion === "Resolved?" ? 0.95 : 0.5 } }, personal: { probability: 0.1 }, destructive: { probability: 0.1 } }
     : {}));
   const out = await runHook({
     tool_name: "AskUserQuestion",
@@ -63,7 +63,7 @@ test("partial answers: resolved question denies, unresolved re-asked", async () 
 });
 
 test("multiSelect: decisive per-option answers join into one label", async () => {
-  const server = await stub(() => ({ personal: { probability: 0.1 }, o0: { probability: 0.9 }, o1: { probability: 0.05 } }));
+  const server = await stub(() => ({ personal: { probability: 0.1 }, destructive: { probability: 0.1 }, o0: { probability: 0.9 }, o1: { probability: 0.05 } }));
   const out = await runHook({
     tool_name: "AskUserQuestion",
     transcript_path: transcript,
@@ -77,7 +77,7 @@ test("duplicate call is silent: one gateway request, one decision line", async (
   let calls = 0;
   const server = await stub(() => {
     calls++;
-    return { pick: { choice: "o0", probabilities: { o0: 0.95 } }, personal: { probability: 0.1 } };
+    return { pick: { choice: "o0", probabilities: { o0: 0.95 } }, personal: { probability: 0.1 }, destructive: { probability: 0.1 } };
   });
   const url = `http://127.0.0.1:${server.address().port}`;
   const input = { tool_name: "AskUserQuestion", session_id: `dedupe-${Math.random()}`, transcript_path: transcript, tool_input: { questions: [{ question: "Dup?", options: opts }] } };

@@ -46,6 +46,7 @@ export const jevStatsRpc = defineRpc({
       positive_pct: z.number(),
       fallback_pct: z.number(),
     }),
+    user_overrides: z.number(),
     recent: z.array(DecisionEventSchema),
   }),
 });

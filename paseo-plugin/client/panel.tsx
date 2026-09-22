@@ -50,6 +50,7 @@ export function AskJevPanel({ theme, layout }: PluginWorkspacePanelProps) {
         <Tile styles={styles} label="Calls" value={String(stats.calls.total)} />
         <Tile styles={styles} label="Jev decided" value={`${stats.decisions.positive_pct.toFixed(0)}%`} />
         <Tile styles={styles} label="Fell back to user" value={`${stats.decisions.fallback_pct.toFixed(0)}%`} />
+        <Tile styles={styles} label="User overrides" value={String(stats.user_overrides)} />
         <Tile styles={styles} label="Avg / p95 latency" value={`${stats.calls.avg_latency_ms}ms / ${stats.calls.p95_latency_ms}ms`} />
       </View>
 

@@ -184,33 +184,100 @@ individually with `JEV_GATES` (comma list; `JEV_GATES=` disables all four).
 
 | Gate | Fires on | Jev judges | Effect |
 |---|---|---|---|
-| `permission` | `PreToolUse` (Bash/Edit/Write/MultiEdit/NotebookEdit) | Is this safe to run without asking? | `p ≥ 0.9` → auto-allow; `p ≤ 0.2` → force an ask; otherwise untouched |
-| `stop` | `Stop` | Did the assistant stop with work still owed? | `p ≥ 0.85` → blocks the stop with a reason; a repeat block is throttled 30s to avoid looping |
+| `permission` | `PreToolUse` (Bash/Edit/Write/MultiEdit/NotebookEdit) | Is this safe to run without asking? | `p ≥ JEV_ALLOW_THRESHOLD` → auto-allow; `p ≤ 0.2` → force an ask; in between, a second `destructive` check decides allow-or-ask (no silent "unsure" bucket) |
+| `stop` | `Stop` | Did the assistant stop with work still owed? | `p ≥ 0.85` → blocks with a reason. In [full autonomy](#4-autonomy), also resolves a trailing "should I…?" on the user's behalf |
 | `bash` | `PostToolUse` (Bash) | success / error / tests_failed / needs_attention | Non-`success` at `p ≥ 0.8` adds one line of context for Claude |
-| `prompt` | `UserPromptSubmit` | Is the prompt ambiguous? (skipped under 12 chars or starting with `/`) | Adds the "ask Jev" reminder, plus a one-line ambiguity warning at `p ≥ 0.85` |
+| `prompt` | `UserPromptSubmit` | Is the prompt ambiguous? (skipped under 12 chars or starting with `/`) | Safe mode: a clarify-with-the-user warning at `p ≥ 0.85`. [Full autonomy](#4-autonomy): never asks — proceeds on the literal reading or states an assumption |
 
 **What Jev is shown.** Every gate — and the `AskUserQuestion` hook from
 section 1 — builds the same structured `state` (`lib/context.mjs`), aiming
-for what a human reviewer would actually look at:
+for what a careful human reviewer would actually look at, filled in this
+priority order (lowest four dropped first if the budget runs out):
 
-- `task`: the first user message of the session (the original ask) and the
-  latest one, verbatim.
-- `conversation`: session turns, newest-first, including tool names used and
-  a short summary of what each tool returned.
-- `workspace`: current git branch, `git status --short`, `git diff --stat`.
-- `action`: whatever is specific to that gate — the exact command/edit being
-  proposed, the Bash output being triaged, or the final assistant message.
+1. `preferences` — CLAUDE.md (global, project root, project `.claude/`) and
+   persistent memory, **verbatim file contents only** — never a description
+   Claude writes of the user. See "Evidence, not characterization" below.
+2. `user_past_choices` — the last 30 times the user was actually asked
+   something and what they picked (same project first), across all
+   sessions. Measured to matter: the same delegation question scored
+   `merge_now=0.98` with an LLM-written "user preferences" blurb, but
+   `clean_then_merge=1.00` — the option the user actually picked — once fed
+   their 7 real prior choices instead.
+3. `task` — `current_task` (the latest user message) plus the last 5 user
+   messages for background.
+4. `action` — the exact thing being judged: the command, or for
+   Edit/Write/MultiEdit the real `before`/`after` content, not just a path.
+5. `plan_and_todos` — the latest `TodoWrite` state and/or a referenced plan
+   file under `~/.claude/plans/`.
+6. `session_summary` — if the session went through `/compact`, that summary
+   verbatim, so Jev isn't blind to everything before the visible window.
+7. `conversation` — recent turns, newest-first, filling whatever budget is
+   left after 1–6.
+8. `history` — Jev's own last 10 decisions this session, to stay consistent.
+9. `permissions` — `allow`/`deny` patterns from `settings.json` — an
+   allow-listed command is never rated risky.
+10. `workspace` — branch, `git status`, `git diff --stat`, the actual `git
+    diff` content (capped), and the file list.
+11. `env` — cwd, current time, platform.
 
-The whole thing is capped at `JEV_STATE_CHARS` (default `60000`; Jev's own
-docs don't document a limit, so this is a self-imposed ceiling), filled in
-the priority order above — `task` first, then as much `conversation` as fits.
-A real ~33k-character state measured ~1.8s round-trip; each gate call times
-out at 4s internally (8s at the hook level), so a slow or oversized state
-degrades to "emits nothing" rather than blocking you. Lower
-`JEV_STATE_CHARS` if you want snappier gates at the cost of less context.
+**Evidence, not characterization.** Nothing in `state` is Claude's own
+description of the user — no "the user prefers X" prose written on the fly.
+Every field is either the user's own words (messages), their own files
+(CLAUDE.md, MEMORY.md), or a record of what they actually chose
+(`user_past_choices`, from a `PostToolUse` hook on `AskUserQuestion` that
+logs every real answer). A static test enforces this: no gate is allowed to
+build a `preferences`/`user_*` field from a string literal.
+
+The whole thing is capped at `JEV_STATE_CHARS` (default `100000` — a real
+~33k-character state measured ~1.8s round-trip and a real 90k-character
+state still got a clean 200; the gateway documents no limit, so this is a
+self-imposed ceiling with margin, not a measured wall). Each gate call times
+out at 4s internally (8s–15s at the hook level, higher for gates that may
+make several sequential calls), so a slow or oversized state degrades to
+"emits nothing" rather than blocking you. Lower `JEV_STATE_CHARS` if you
+want snappier gates at the cost of less context. Every call logs the size in
+characters of each section as `state_sizes` — never the content — so the
+budget can be tuned from `bin/jev.mjs stats` without exposing anything.
 
 Same fail-open rules as everywhere else: no API key, a gateway error, or a
 timeout means the gate is silent — never a blocker.
+
+## 4. Autonomy
+
+`JEV_AUTONOMY` controls how much ask-jev acts instead of asking you —
+**`full` is the default**; set it to `safe` to go back to the pre-autonomy
+behavior (Jev only ever auto-*answers* on your behalf, never proceeds past a
+question or a stop on its own).
+
+One guardrail never turns off, in either mode: a `destructive` boolean —
+"would this destroy or expose something that cannot be undone: delete files
+outside the workspace, drop data, force-push/rewrite shared history,
+publish/deploy/pay/send to third parties, leak secrets" — and `p ≥ 0.6`
+always hands the decision to you, full autonomy or not.
+
+What changes in `full`:
+
+- **`AskUserQuestion`** — the `personal` check (is this the user's call?) no
+  longer causes a fallback by itself; only `destructive` does. A question
+  Jev is confident about gets answered even if it reads as a personal
+  preference, as long as it isn't destructive.
+- **`prompt` gate** — an ambiguous prompt never turns into "ask the user."
+  Instead Jev judges whether the literal reading is actionable: if so,
+  Claude proceeds and states its assumption in one line; if not, Claude
+  picks the reading most consistent with the original task, states that
+  assumption, and proceeds. Either way, no question reaches you.
+- **`stop` gate** — if the assistant's final message ends by asking you a
+  question or for permission ("do you want me to…", "should I…"), Jev
+  judges what should happen: answerable and not destructive → the stop is
+  blocked with Jev's answer and an instruction not to ask again; already
+  satisfied → the stop proceeds; destructive or genuinely your call → the
+  stop proceeds so the question actually reaches you.
+- **`permission` gate** — the allow threshold is `JEV_ALLOW_THRESHOLD`
+  (default `0.8` in `full`, `0.9` in `safe`) instead of a fixed `0.9`.
+
+Every autonomous decision is still logged with the same `label` +
+`confidence` + `reason` shape as everything else — nothing here is silent,
+it's just no longer routed through you.
 
 ## Usage analytics
 
@@ -231,7 +298,7 @@ node ~/.claude/plugins/marketplaces/ask-jev/bin/jev.mjs stats
 ```
 Calls: 19 (ok 18, error 1)
 Latency: avg 512ms, p95 910ms
-Jev decided: 63.2%  Fell back to user: 15.8%
+Jev decided: 63.2%  Fell back to user: 15.8%  User overrides: 7
 
 Decisions by outcome:
   answered               7  36.8%
@@ -254,7 +321,7 @@ Recent decisions:
 
 Narrow the window with `--last N` or `--since 7d|24h`, or add `--json` to get the raw aggregates instead of the text report.
 
-`decisions.by_gate` breaks the same numbers down per gate — `{ total, positive, by_outcome }` — since each gate defines "positive" differently (an `ask` decision Jev answered outright, a `permission` decision Jev auto-allowed, a `bash` run Jev judged `success`, …). "Fell back to user" only counts the two cases where a question or permission prompt actually reached you: an unanswered `ask` question, or a `permission` gate that forced an `ask`.
+`decisions.by_gate` breaks the same numbers down per gate — `{ total, positive, by_outcome }` — since each gate defines "positive" differently (an `ask` decision Jev answered outright, a `permission` decision Jev auto-allowed, a `bash` run Jev judged `success`, …). "Fell back to user" only counts the two cases where a question or permission prompt actually reached you: an unanswered `ask` question, or a `permission` gate that forced an `ask`. "User overrides" counts `user_choice` events — every real answer you gave `AskUserQuestion`, captured by a `PostToolUse` hook and fed back into `user_past_choices` for future decisions.
 
 **Note:** `${CLAUDE_PLUGIN_ROOT}` is available inside Claude Code hooks/skills; for manual CLI calls from your terminal, use `~/.claude/plugins/marketplaces/ask-jev/bin/jev.mjs` or the `jev` alias.
 
@@ -285,7 +352,9 @@ All optional — sensible defaults out of the box.
 | `JEV_ASK_THRESHOLD` | `0.8` | lower it to let Jev answer more often (and be wrong more often) |
 | `JEV_REMIND` | (on) | set to `0` to stop the per-turn "ask Jev" reminder |
 | `JEV_GATES` | `permission,stop,bash,prompt` | comma list of enabled [automatic gates](#3-automatic-gates); empty disables all |
-| `JEV_STATE_CHARS` | `60000` | max characters of context sent to Jev per gate call — lower for faster/cheaper gates |
+| `JEV_STATE_CHARS` | `100000` | max characters of context sent to Jev per gate call — lower for faster/cheaper gates |
+| `JEV_AUTONOMY` | `full` | [autonomy mode](#4-autonomy); set to `safe` to only ever auto-answer, never proceed on its own |
+| `JEV_ALLOW_THRESHOLD` | `0.8` full / `0.9` safe | `permission` gate's auto-allow threshold |
 | `JEV_MODEL` | `typesafe-ai/jev` | which model Jev evaluation runs against |
 | `JEV_GATEWAY_URL` | Vercel's evaluation endpoint | only needed for a custom gateway |
 

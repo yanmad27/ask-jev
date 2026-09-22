@@ -5,10 +5,9 @@ description: Use whenever you are about to make a judgement call that isn't your
 
 # Ask Jev
 
-Jev (typesafe.ai) is a small, fast evaluation model. Given evidence and a
+Jev (typesafe.ai) is a small, fast evaluation model: given evidence and a
 definition of what each answer means, it returns a calibrated probability —
-not text, not an excuse. Consult it instead of silently deciding, and
-instead of interrupting the user for something they didn't need to be asked.
+not text. Consult it instead of silently deciding or interrupting the user.
 
 ## When to ask
 
@@ -20,7 +19,7 @@ Ask Jev when:
 
 Go straight to the user instead when the choice is personal taste, style, or
 irreversible (delete, send, publish, spend money). No evidence yet? Go get
-it first — Jev doesn't research, it only judges what you hand it.
+it first — Jev doesn't research, only judges what you hand it.
 
 ## How to build a good request
 
@@ -36,18 +35,31 @@ One JSON object: `{ state, questions }`.
 - **instructions** — `{ question, focus }`. `question` is the complete
   judgement in one sentence; `focus` narrows what to weigh or ignore.
   Reference state fields with backticks, e.g. `` `diff` ``.
-- **criteria** — what each answer means. This decides whether the
-  probability is worth anything:
+- **criteria** — what each answer means, deciding whether the probability is
+  worth anything:
   - `choice` — one entry per option: `{ what, not_for, examples }`. `what`
-    is the definition. `not_for` names the sibling options it must not be
-    confused with, stated on every option. `examples` is 1–3 short concrete
-    instances.
-  - `boolean` (yes/no; typesafe.ai's docs call this primitive "noul") —
-    `{ true: "...", false: "..." }`, each a full definition, not just the word.
+    defines it, `not_for` names siblings it must not be confused with,
+    `examples` is 1–3 concrete instances.
+  - `boolean` ("noul" in typesafe.ai's docs) — `{ true: "...", false: "..." }`,
+    each a full definition, not just the word.
 
 Every definition must be **observable** (checkable directly against `state`,
 not inferred) and **mutually exclusive** (no other option's definition could
 also be true at once).
+
+## Delegation: deciding as the user
+
+When the user defers a choice ("hỏi Jev", "tùy anh/chị", "làm đi", "you
+decide"), ask Jev **which option the user would choose** — never what their
+reply literally says. Real regression: asking "what does the user's reply
+say?" with an `undetermined` option whose example matched the reply verbatim
+scored `undetermined=1.00` — useless. Re-asked as "acting on the user's
+behalf, which option should be taken?", real options only plus a separate
+`confident` boolean, it scored `merge_now=0.98, confident=0.66` — usable.
+
+Never add an `undetermined`/`unsure`/`other` bucket — criteria are only the
+real options. Add a separate boolean `confident` ("enough evidence to decide
+without the user? reversible/cosmetic needs less").
 
 ## Examples
 
@@ -69,24 +81,8 @@ Yes/no:
 }
 ```
 
-Choice:
-
-```json
-{
-  "state": { "ticket": "Customer says the app crashes on launch after the update." },
-  "questions": {
-    "category": {
-      "type": "choice",
-      "instructions": { "question": "Which category does `ticket` belong to?", "focus": "Classify what's reported, not how urgent it sounds." },
-      "criteria": {
-        "bug": { "what": "A defect in existing behavior — something that used to work and now doesn't", "not_for": "feature_request, question", "examples": ["app crashes on launch"] },
-        "feature_request": { "what": "A request for new behavior that never existed", "not_for": "bug, question", "examples": ["please add dark mode"] },
-        "question": { "what": "The customer wants to understand something, no defect implied", "not_for": "bug, feature_request", "examples": ["how do I export my data"] }
-      }
-    }
-  }
-}
-```
+Choice — same shape, `criteria` keyed by option name instead of `true`/`false`:
+`"category": { "type": "choice", "criteria": { "bug": { "what": "...", "not_for": "feature_request, question", "examples": [...] }, "feature_request": {...}, "question": {...} } }`.
 
 ## How to call it
 
@@ -101,19 +97,17 @@ stderr message (no key, malformed input, gateway error, timeout).
 
 - `choice`: `{ choice: "bug", probabilities: { bug: 0.94, ... }, confidence: 0.9 }`.
 - `boolean`: `{ probability: 0.97, confidence: 0.95 }` — probability of "true".
-- `confidence` is separate from probability: it summarizes how concentrated
-  the distribution is, not correctness. Threshold on it — reuse
-  `JEV_ASK_THRESHOLD` (default `0.8`); below it, ask the user or gather more
-  evidence instead of acting.
+- `confidence` summarizes how concentrated the distribution is, not
+  correctness — threshold on it (reuse `JEV_ASK_THRESHOLD`, default `0.8`);
+  below it, ask the user or gather more evidence instead of acting.
 
 ## Anti-patterns
 
-- A criterion that's just the option's label ("Yes", "bug") with no
-  definition — nothing to judge against.
-- Two options whose definitions overlap, or that don't name each other in
-  `not_for`.
-- Summarizing the evidence into `state` instead of pasting it verbatim.
-- Bundling several independent judgements into one `question` instead of
-  decomposing them into separate entries.
+- A criterion that's just the label ("Yes", "bug") — nothing to judge against.
+- Two options whose definitions overlap or don't name each other in `not_for`.
+- Summarizing evidence into `state` instead of pasting it verbatim.
+- Bundling several independent judgements into one `question`.
+- An `undetermined`/`unsure`/`other` bucket instead of asking what the user
+  would pick (see Delegation).
 
 To see how often Jev is actually being consulted: `node "${CLAUDE_PLUGIN_ROOT}/bin/jev.mjs" stats`.

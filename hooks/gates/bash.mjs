@@ -17,9 +17,10 @@ async function main() {
   if (!input || input.tool_name !== "Bash") return;
 
   const output = tailText(responseText(input.tool_response), 60);
-  const state = buildState({
+  const { state, sizes } = buildState({
     transcriptPath: input.transcript_path,
     cwd: input.cwd,
+    sessionId: input.session_id,
     action: { command: input.tool_input?.command ?? "", output },
   });
   if (!hasContext(state)) return;
@@ -32,13 +33,12 @@ async function main() {
   };
   const answers = await askJev(apiKey(), state, {
     result: { type: "choice", instructions: { question: "How did this command's execution turn out?", focus: FOCUS }, criteria: opts },
-  }, "gate:bash", 4000).catch(() => null);
-  if (!answers) return;
-
-  const choice = answers.result.choice;
+  }, "gate:bash", 4000, sizes).catch(() => null);
+  const choice = answers?.result?.choice;
+  if (!choice) return;
   const p = answers.result.probabilities?.[choice] ?? 1;
   logEvent({
-    kind: "decision", source: "hook", gate: "bash", outcome: choice,
+    kind: "decision", source: "hook", gate: "bash", outcome: choice, session_id: input.session_id,
     question: truncate(input.tool_input?.command ?? "", 120),
     label: choice, confidence: p, reason: truncate(opts[choice]?.what ?? "", 160),
   });

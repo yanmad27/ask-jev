@@ -36,7 +36,7 @@ function stats(args) {
 
   process.stdout.write(`Calls: ${summary.calls.total} (ok ${summary.calls.ok}, error ${summary.calls.error})\n`);
   process.stdout.write(`Latency: avg ${summary.calls.avg_latency_ms}ms, p95 ${summary.calls.p95_latency_ms}ms\n`);
-  process.stdout.write(`Jev decided: ${summary.decisions.positive_pct.toFixed(1)}%  Fell back to user: ${summary.decisions.fallback_pct.toFixed(1)}%\n\n`);
+  process.stdout.write(`Jev decided: ${summary.decisions.positive_pct.toFixed(1)}%  Fell back to user: ${summary.decisions.fallback_pct.toFixed(1)}%  User overrides: ${summary.user_overrides}\n\n`);
   process.stdout.write("Decisions by outcome:\n");
   for (const [outcome, count] of Object.entries(summary.decisions.by_outcome)) {
     const pct = summary.decisions.total ? ((count / summary.decisions.total) * 100).toFixed(1) : "0.0";
@@ -51,7 +51,7 @@ function stats(args) {
   process.stdout.write("\nRecent decisions:\n");
   for (const d of recentDecisions(events, 10)) {
     const q = d.question.length > 60 ? `${d.question.slice(0, 57)}...` : d.question;
-    const extra = d.label ? `${d.label} (${Number(d.confidence).toFixed(2)})` : "";
+    const extra = d.label ? (d.confidence != null ? `${d.label} (${Number(d.confidence).toFixed(2)})` : d.label) : "";
     process.stdout.write(`  ${d.ts}  ${d.outcome.padEnd(18)} ${q.padEnd(62)} ${extra}\n`);
   }
 }

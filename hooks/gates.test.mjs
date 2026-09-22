@@ -24,11 +24,13 @@ function stub(answers) {
   return new Promise((r) => server.listen(0, "127.0.0.1", () => r(server)));
 }
 
-async function runGateFull(name, input, url, gates = name, cwd) {
+// Mặc định "safe" — bộ test này viết cho hành vi trước autonomy; autonomy.test.mjs tự
+// override "full" cho từng test cần.
+async function runGateFull(name, input, url, gates = name, cwd, mode = "safe") {
   const script = fileURLToPath(new URL(`gates/${name}.mjs`, import.meta.url));
   const child = execFileAsync("node", [script], {
     cwd,
-    env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", JEV_GATEWAY_URL: url, JEV_LOG_FILE: logFile, JEV_GATES: gates, JEV_REMIND: "0" },
+    env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", JEV_GATEWAY_URL: url, JEV_LOG_FILE: logFile, JEV_GATES: gates, JEV_REMIND: "0", JEV_AUTONOMY: mode },
     encoding: "utf8",
   });
   child.child.stdin.end(JSON.stringify(input));
