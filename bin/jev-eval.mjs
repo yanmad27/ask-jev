@@ -70,7 +70,7 @@ async function judgePermission(key, question, cwd, allowThreshold) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       const answers = await askJev(key, state, questions, "eval", 8000);
-      const result = decidePermission(answers.safe?.probability, answers.destructive?.probability, allowThreshold);
+      const result = decidePermission(answers.safe?.probability, answers.destructive?.probability, allowThreshold, autonomy());
       return { decision: result.decision, safe: answers.safe?.probability, destructive: answers.destructive?.probability };
     } catch (err) {
       if (attempt === 3) return { error: `${err.message} (after 3 attempts)` };

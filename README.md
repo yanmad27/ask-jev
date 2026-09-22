@@ -202,7 +202,7 @@ individually with `ASK_JEV_GATES` (comma list; `ASK_JEV_GATES=` disables all fou
 
 | Gate | Fires on | Jev judges | Effect |
 |---|---|---|---|
-| `permission` | `PreToolUse` (every tool — matcher `*`) | Is this safe to run without asking? | A static read-only allowlist (`Read`, `Grep`, `Glob`, `LS`, `WebSearch`, `WebFetch`, `list_`/`get_`/`read_`/`search_`/`inspect_`/`capture_`-style MCP calls, …) auto-allows with **zero network calls**. Everything else asks Jev both `safe` and `destructive` together: `p(destructive) ≥ 0.6` always forces an ask; else `p(safe) ≥ ASK_JEV_ALLOW_THRESHOLD` and `p(destructive) < 0.3` → auto-allow; otherwise ask (no silent "unsure" bucket) |
+| `permission` | `PreToolUse` (every tool — matcher `*`) | Is this safe to run without asking? | A static read-only allowlist (`Read`, `Grep`, `Glob`, `LS`, `WebSearch`, `WebFetch`, `list_`/`get_`/`read_`/`search_`/`inspect_`/`capture_`-style MCP calls, …) auto-allows with **zero network calls**. Everything else asks Jev both `safe` and `destructive` together: `p(destructive) ≥ 0.6` always forces an ask; else `p(safe) ≥ ASK_JEV_ALLOW_THRESHOLD` and `p(destructive) < 0.3` → auto-allow; otherwise ask (no silent "unsure" bucket). In [full autonomy](#4-autonomy), anything Jev rates non-destructive (`< 0.3`) proceeds even if `safe` misses the threshold; `0.3–0.6` asks; `≥ 0.6` always asks |
 | `stop` | `Stop` | Did the assistant stop with work still owed? | `p ≥ 0.85` → blocks with a reason. In [full autonomy](#4-autonomy), also resolves a trailing "should I…?" on the user's behalf |
 | `bash` | `PostToolUse` (Bash) | success / error / tests_failed / needs_attention | Non-`success` at `p ≥ 0.8` adds one line of context for Claude |
 | `prompt` | `UserPromptSubmit` | Is the prompt ambiguous? (skipped under 12 chars or starting with `/`) | Safe mode: a clarify-with-the-user warning at `p ≥ 0.85`. [Full autonomy](#4-autonomy): never asks — proceeds on the literal reading or states an assumption |
@@ -328,7 +328,11 @@ What changes in `full`:
   satisfied → the stop proceeds; destructive or genuinely your call → the
   stop proceeds so the question actually reaches you.
 - **`permission` gate** — the allow threshold is `ASK_JEV_ALLOW_THRESHOLD`
-  (default `0.8` in `full`, `0.9` in `safe`) instead of a fixed `0.9`.
+  (default `0.8` in `full`, `0.9` in `safe`) instead of a fixed `0.9`; more
+  importantly, `destructive` is now the hard floor by itself. In full
+  autonomy, anything Jev rates non-destructive (`< 0.3`) proceeds — `safe`
+  no longer has to clear the threshold too; `0.3–0.6` still asks; `≥ 0.6`
+  always asks.
 
 Every autonomous decision is still logged with the same `label` +
 `confidence` + `reason` shape as everything else — nothing here is silent,

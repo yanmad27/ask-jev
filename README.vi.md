@@ -199,7 +199,7 @@ quyết định cần hỏi. Cả bốn bật sẵn, tắt riêng từng cái b�
 
 | Gate | Chạy lúc | Jev phán | Kết quả |
 |---|---|---|---|
-| `permission` | `PreToolUse` (mọi tool — matcher `*`) | Việc này chạy không cần hỏi có an toàn không? | Allowlist tĩnh cho tool đọc-only (`Read`, `Grep`, `Glob`, `LS`, `WebSearch`, `WebFetch`, MCP dạng `list_`/`get_`/`read_`/`search_`/`inspect_`/`capture_`, …) tự allow ngay, **không gọi mạng**. Còn lại hỏi Jev cả `safe` lẫn `destructive` cùng lúc: `p(destructive) ≥ 0.6` luôn ép hỏi lại; nếu không thì `p(safe) ≥ ASK_JEV_ALLOW_THRESHOLD` và `p(destructive) < 0.3` → tự allow; còn lại hỏi lại (không còn bucket "unsure" im lặng) |
+| `permission` | `PreToolUse` (mọi tool — matcher `*`) | Việc này chạy không cần hỏi có an toàn không? | Allowlist tĩnh cho tool đọc-only (`Read`, `Grep`, `Glob`, `LS`, `WebSearch`, `WebFetch`, MCP dạng `list_`/`get_`/`read_`/`search_`/`inspect_`/`capture_`, …) tự allow ngay, **không gọi mạng**. Còn lại hỏi Jev cả `safe` lẫn `destructive` cùng lúc: `p(destructive) ≥ 0.6` luôn ép hỏi lại; nếu không thì `p(safe) ≥ ASK_JEV_ALLOW_THRESHOLD` và `p(destructive) < 0.3` → tự allow; còn lại hỏi lại (không còn bucket "unsure" im lặng). Ở [tự trị full](#4-tự-trị), bất cứ gì Jev chấm không destructive (`< 0.3`) đều chạy tiếp dù `safe` không đạt ngưỡng; `0.3–0.6` vẫn hỏi lại; `≥ 0.6` luôn hỏi lại |
 | `stop` | `Stop` | Claude dừng khi việc còn dang dở không? | `p ≥ 0.85` → chặn dừng kèm lý do. Ở [tự trị full](#4-tự-trị), còn tự trả lời thay nếu câu cuối hỏi xin phép |
 | `bash` | `PostToolUse` (Bash) | success / error / tests_failed / needs_attention | Không phải `success` với `p ≥ 0.8` → gắn thêm một dòng ngữ cảnh cho Claude |
 | `prompt` | `UserPromptSubmit` | Prompt có mập mờ không? (bỏ qua nếu dưới 12 ký tự hoặc bắt đầu bằng `/`) | Safe: cảnh báo hỏi lại người dùng nếu `p ≥ 0.85`. [Tự trị full](#4-tự-trị): không bao giờ hỏi — chạy theo nghĩa đen hoặc nêu giả định rồi làm luôn |
@@ -324,7 +324,10 @@ Full thay đổi gì:
   không hỏi lại; đã xong việc rồi → cho dừng; destructive hoặc thật sự là
   chuyện của bạn → cho dừng để câu hỏi thật sự tới tay bạn.
 - **Gate `permission`** — ngưỡng allow là `ASK_JEV_ALLOW_THRESHOLD` (mặc định
-  `0.8` ở `full`, `0.9` ở `safe`) thay vì cố định `0.9`.
+  `0.8` ở `full`, `0.9` ở `safe`) thay vì cố định `0.9`; quan trọng hơn,
+  `destructive` giờ tự nó là sàn cứng. Ở full autonomy, bất cứ gì Jev chấm
+  không destructive (`< 0.3`) đều chạy tiếp — `safe` không còn phải đạt
+  ngưỡng nữa; `0.3–0.6` vẫn hỏi lại; `≥ 0.6` luôn hỏi lại.
 
 Mọi quyết định tự trị vẫn được log với đúng dạng `label` + `confidence` +
 `reason` như mọi nơi khác — không có gì ở đây là im lặng, chỉ là không còn

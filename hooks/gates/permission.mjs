@@ -45,7 +45,7 @@ async function main() {
 
   const p = answers.safe?.probability;
   const dp = answers.destructive?.probability;
-  const result = decidePermission(p, dp, allowThreshold);
+  const result = decidePermission(p, dp, allowThreshold, mode);
   logDecision(input, { label: result.label, confidence: result.confidence, outcome: result.decision, reason: result.reason });
   respond(result.decision, `Jev: safe=${p?.toFixed(2) ?? "?"} destructive=${dp?.toFixed(2) ?? "?"} — ${result.decision === "allow" ? "auto-allowed" : "ask the user first"}.`);
 }
