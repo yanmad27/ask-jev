@@ -237,11 +237,15 @@ self-imposed ceiling with margin, not a measured wall). The cap is enforced
 on the actual serialized `JSON.stringify(state).length` as sections are
 added in priority order, not a sum of each section's own internal size —
 a section that doesn't fit is truncated (head kept, marked
-`…[truncated]`) or dropped outright if there's no room at all. Each gate call times
-out at 4s internally (8s–15s at the hook level, higher for gates that may
-make several sequential calls), so a slow or oversized state degrades to
-"emits nothing" rather than blocking you. Lower `JEV_STATE_CHARS` if you
-want snappier gates at the cost of less context. Every call logs the size in
+`…[truncated]`) or dropped outright if there's no room at all. Each gate
+call is budgeted at 4s (`ask-jev.mjs`'s `AskUserQuestion` answering gets
+8s) — split internally into two ~1850ms attempts so a retry (see below)
+never blows the budget — and the `hooks.json` timeout for each hook is set
+to `budget/1000 + 1s` margin per sequential call a gate might make (6s for
+the single-call gates, 16s for `stop`'s up to three, 10s for `ask-jev.mjs`).
+A slow or oversized state degrades to "emits nothing" rather than blocking
+you. Lower `JEV_STATE_CHARS` if you want snappier gates at the cost of less
+context. Every call logs the size in
 characters of each section as `state_sizes` — never the content — so the
 budget can be tuned from `bin/jev.mjs stats` without exposing anything.
 

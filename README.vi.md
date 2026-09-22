@@ -234,10 +234,14 @@ biên an toàn, không phải bức tường đo được thật). Trần này �
 thước thật của `JSON.stringify(state).length` khi lấp từng phần theo đúng
 thứ tự ưu tiên, không phải tổng kích thước riêng từng phần cộng lại — phần
 nào không vừa thì bị cắt (giữ đầu, đánh dấu `…[truncated]`) hoặc bỏ hẳn nếu
-hết sạch chỗ. Mỗi gate tự timeout 4s
-(8s–15s ở mức hook, cao hơn cho gate có thể gọi nhiều lần liên tiếp), nên
-state chậm hoặc quá khổ chỉ khiến gate "im lặng" chứ không chặn bạn. Hạ
-`JEV_STATE_CHARS` nếu muốn gate nhanh hơn, đổi lại ít ngữ cảnh hơn. Mỗi lần
+hết sạch chỗ. Mỗi gate có ngân sách 4s (riêng phần trả lời `AskUserQuestion`
+của `ask-jev.mjs` là 8s) — tự chia đôi thành 2 attempt ~1850ms để dù có retry
+(xem bên dưới) cũng không vượt ngân sách — và timeout trong `hooks.json` của
+mỗi hook đặt bằng `budget/1000 + 1s` margin nhân với số lần gọi tuần tự gate
+đó có thể làm (6s cho gate chỉ gọi 1 lần, 16s cho `stop` gọi tối đa 3 lần,
+10s cho `ask-jev.mjs`). State chậm hoặc quá khổ chỉ khiến gate "im lặng"
+chứ không chặn bạn. Hạ `JEV_STATE_CHARS` nếu muốn gate nhanh hơn, đổi lại
+ít ngữ cảnh hơn. Mỗi lần
 gọi đều log kích thước từng phần bằng ký tự dưới dạng `state_sizes` — không
 bao giờ log nội dung — để tinh chỉnh ngân sách từ `bin/jev.mjs stats` mà
 không lộ gì.

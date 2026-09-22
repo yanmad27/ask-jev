@@ -160,3 +160,22 @@ test("lib/jev.mjs: askJev retries once on a 5xx gateway response, logs retried:t
   assert.equal(call.status, "ok");
   assert.equal(call.retried, true);
 });
+
+test("lib/jev.mjs: a hanging gateway response stays within the requested budget", async () => {
+  const server = createServer((req) => {
+    req.on("data", () => {}); // không bao giờ res.end() — mô phỏng gateway treo
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const budgetMs = 2000;
+  const script = "import('./lib/jev.mjs').then(async ({askJev}) => { "
+    + `const t0 = Date.now(); try { await askJev('dummy', {x:1}, {ok:{type:'boolean',instructions:{question:'q',focus:'f'},criteria:{true:'t',false:'f'}}}, 'test', ${budgetMs}); } catch {} `
+    + "process.stdout.write(String(Date.now() - t0)); });";
+  const { stdout } = await execFileAsync("node", ["-e", script], {
+    env: { ...process.env, JEV_GATEWAY_URL: url, JEV_LOG_FILE: logFile },
+    encoding: "utf8",
+  });
+  server.close();
+  const elapsed = Number(stdout);
+  assert.ok(elapsed < budgetMs + 500, `expected well under budgetMs=${budgetMs}, got ${elapsed}ms`);
+});
