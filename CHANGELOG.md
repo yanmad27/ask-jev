@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/yanmad27/ask-jev/compare/v1.0.1...v1.0.2) (2026-09-22)
+
+
+### Bug Fixes
+
+* **permission:** Claude Code plan/memory/todo dirs count as scratch ([#24](https://github.com/yanmad27/ask-jev/issues/24)) ([eb7af60](https://github.com/yanmad27/ask-jev/commit/eb7af604cf95f64392ded035c9eee4f960ca37f5))
+
 ## [1.0.1](https://github.com/yanmad27/ask-jev/compare/v1.0.0...v1.0.1) (2026-09-22)
 
 
