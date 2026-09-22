@@ -31,14 +31,19 @@ Questions that are genuinely yours to answer still reach you, unchanged.
 
 ## Install
 
-1. Add the marketplace and install the plugin:
+1. Add the marketplace (once per machine):
 
    ```
    /plugin marketplace add yanmad27/ask-jev
+   ```
+
+2. Install the plugin:
+
+   ```
    /plugin install ask-jev@ask-jev
    ```
 
-2. Give it a Vercel AI Gateway key (Jev lives in Vercel's model catalogue):
+3. Give it a Vercel AI Gateway key (Jev lives in Vercel's model catalogue):
 
    ```bash
    echo 'vck_...' > ~/.claude/ask-jev.key && chmod 600 ~/.claude/ask-jev.key

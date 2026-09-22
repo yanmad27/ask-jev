@@ -30,14 +30,19 @@ Câu nào thật sự thuộc về bạn thì vẫn tới tay bạn, y như cũ.
 
 ## Cài đặt
 
-1. Thêm marketplace rồi cài plugin:
+1. Thêm marketplace (một lần mỗi máy):
 
    ```
    /plugin marketplace add yanmad27/ask-jev
+   ```
+
+2. Cài plugin:
+
+   ```
    /plugin install ask-jev@ask-jev
    ```
 
-2. Đặt khoá Vercel AI Gateway (Jev nằm trong danh mục model của Vercel):
+3. Đặt khoá Vercel AI Gateway (Jev nằm trong danh mục model của Vercel):
 
    ```bash
    echo 'vck_...' > ~/.claude/ask-jev.key && chmod 600 ~/.claude/ask-jev.key
