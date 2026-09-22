@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.1](https://github.com/yanmad27/ask-jev/compare/v1.0.0...v1.0.1) (2026-09-22)
+
+
+### Bug Fixes
+
+* **permission:** cover all tools, read-only fast path, narrower destructive criteria ([#21](https://github.com/yanmad27/ask-jev/issues/21)) ([c9e29d0](https://github.com/yanmad27/ask-jev/commit/c9e29d08decc95a44793f5b69c851425648d4e68))
+* **permission:** full autonomy allows any non-destructive action ([#23](https://github.com/yanmad27/ask-jev/issues/23)) ([67deb15](https://github.com/yanmad27/ask-jev/commit/67deb155f3c97e4c69d610aec9a01ab7d1cd8ff0))
+
 ## [1.0.0](https://github.com/yanmad27/ask-jev/compare/v0.7.0...v1.0.0) (2026-09-22)
 
 
