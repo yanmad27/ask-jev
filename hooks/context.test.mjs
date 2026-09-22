@@ -99,6 +99,9 @@ test("ask-jev-answer.mjs: parses real AskUserQuestion tool_response strings, ign
   const positive2 = 'The user answered: "Where is the logo file on disk? (...)"="~/Downloads/....jpg". Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say.';
   const negativeOwnDeny = 'Jev answered on the user\'s behalf from conversation context. Do NOT ask again — use these choices and continue:\n"Which option?" → A (Jev: 0.91)';
   const negativeCanceled = "Tool permission request failed: ... canceled";
+  // "Answer: ..." is an ORCHESTRATOR deny reason (another agent denying the
+  // AskUserQuestion permission with a message) — not a real user answer. Confirmed by
+  // security review; do not reopen this exclusion without re-checking that.
   const negativeAnswerProse = "Answer: the user wants to proceed with option B, do not ask again";
 
   for (const s of [positive1, positive2, negativeOwnDeny, negativeCanceled, negativeAnswerProse]) {
@@ -115,4 +118,17 @@ test("ask-jev-answer.mjs: parses real AskUserQuestion tool_response strings, ign
   assert.equal(events[1].question, "Where is the logo file on disk? (...)");
   assert.deepEqual(events[1].chosen, ["~/Downloads/....jpg"]);
   assert.equal(events[1].kind_of_answer, "free_text");
+});
+
+test("buildState: JEV_STATE_CHARS is enforced on the real serialized state, not summed per-field estimates", async () => {
+  const home = tmpHome();
+  // 20k CLAUDE.md — way over a 1000-char cap; the old bug summed each field's own
+  // internal cap (preferences alone up to 8000) and always included it regardless of
+  // JEV_STATE_CHARS, so a small cap still let an ~8.8x-oversized state through.
+  writeFileSync(join(home, ".claude", "CLAUDE.md"), "x".repeat(20_000));
+  const cwd = mkdtempSync(join(tmpdir(), "ctx-cwd6-"));
+  const transcript = join(cwd, "t.jsonl");
+  writeFileSync(transcript, `${JSON.stringify({ type: "user", message: { content: "hi" } })}\n`);
+  const { state } = await callBuildState({ transcriptPath: transcript, cwd }, home, { JEV_STATE_CHARS: "1000" });
+  assert.ok(JSON.stringify(state).length <= 1000, `serialized state must be <= 1000 chars, got ${JSON.stringify(state).length}`);
 });

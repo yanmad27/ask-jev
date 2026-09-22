@@ -204,7 +204,8 @@ cuối bị bỏ trước nếu hết ngân sách):
 4. `action` — đúng thứ đang được xét: lệnh, hoặc với Edit/Write/MultiEdit là
    nội dung `before`/`after` thật, không chỉ đường dẫn.
 5. `plan_and_todos` — state `TodoWrite` mới nhất và/hoặc file plan tham
-   chiếu dưới `~/.claude/plans/`.
+   chiếu dưới `~/.claude/plans/` (đường dẫn được resolve và kiểm tra nằm
+   đúng trong thư mục đó trước khi đọc — không cho `../` đi lệch ra ngoài).
 6. `session_summary` — nếu phiên đã qua `/compact`, bản tóm tắt đó nguyên
    văn, để Jev không mù trước cửa sổ hiện đang thấy.
 7. `conversation` — các lượt gần nhất, mới nhất trước, lấp phần ngân sách
@@ -214,7 +215,8 @@ cuối bị bỏ trước nếu hết ngân sách):
 9. `permissions` — pattern `allow`/`deny` từ `settings.json` — lệnh đã
    allow-list thì không bao giờ bị chấm risky.
 10. `workspace` — branch, `git status`, `git diff --stat`, nội dung `git
-    diff` thật (bị chặn), và danh sách file.
+    diff` thật (bị chặn, và bỏ hẳn hunk của file `.env*`/`*.pem`/`*.key`/
+    `*secret*` dù đã được track), và danh sách file.
 11. `env` — cwd, giờ hiện tại, platform.
 
 **Bằng chứng, không mô tả.** Không có gì trong `state` là mô tả do Claude tự
@@ -228,7 +230,11 @@ field `preferences`/`user_*` từ một chuỗi literal.
 Tất cả bị chặn ở `JEV_STATE_CHARS` (mặc định `100000` — một state thật ~33
 nghìn ký tự đo được khoảng 1.8s round-trip, và một state thật 90 nghìn ký tự
 vẫn 200 sạch; gateway không công bố giới hạn nào nên đây là trần tự đặt có
-biên an toàn, không phải bức tường đo được thật). Mỗi gate tự timeout 4s
+biên an toàn, không phải bức tường đo được thật). Trần này ép trên kích
+thước thật của `JSON.stringify(state).length` khi lấp từng phần theo đúng
+thứ tự ưu tiên, không phải tổng kích thước riêng từng phần cộng lại — phần
+nào không vừa thì bị cắt (giữ đầu, đánh dấu `…[truncated]`) hoặc bỏ hẳn nếu
+hết sạch chỗ. Mỗi gate tự timeout 4s
 (8s–15s ở mức hook, cao hơn cho gate có thể gọi nhiều lần liên tiếp), nên
 state chậm hoặc quá khổ chỉ khiến gate "im lặng" chứ không chặn bạn. Hạ
 `JEV_STATE_CHARS` nếu muốn gate nhanh hơn, đổi lại ít ngữ cảnh hơn. Mỗi lần

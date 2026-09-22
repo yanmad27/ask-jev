@@ -208,7 +208,8 @@ priority order (lowest four dropped first if the budget runs out):
 4. `action` — the exact thing being judged: the command, or for
    Edit/Write/MultiEdit the real `before`/`after` content, not just a path.
 5. `plan_and_todos` — the latest `TodoWrite` state and/or a referenced plan
-   file under `~/.claude/plans/`.
+   file under `~/.claude/plans/` (path is resolved and verified to stay
+   inside that directory before reading — no `../` traversal).
 6. `session_summary` — if the session went through `/compact`, that summary
    verbatim, so Jev isn't blind to everything before the visible window.
 7. `conversation` — recent turns, newest-first, filling whatever budget is
@@ -217,7 +218,8 @@ priority order (lowest four dropped first if the budget runs out):
 9. `permissions` — `allow`/`deny` patterns from `settings.json` — an
    allow-listed command is never rated risky.
 10. `workspace` — branch, `git status`, `git diff --stat`, the actual `git
-    diff` content (capped), and the file list.
+    diff` content (capped, with hunks for `.env*`/`*.pem`/`*.key`/`*secret*`
+    files dropped even if tracked), and the file list.
 11. `env` — cwd, current time, platform.
 
 **Evidence, not characterization.** Nothing in `state` is Claude's own
@@ -231,7 +233,11 @@ build a `preferences`/`user_*` field from a string literal.
 The whole thing is capped at `JEV_STATE_CHARS` (default `100000` — a real
 ~33k-character state measured ~1.8s round-trip and a real 90k-character
 state still got a clean 200; the gateway documents no limit, so this is a
-self-imposed ceiling with margin, not a measured wall). Each gate call times
+self-imposed ceiling with margin, not a measured wall). The cap is enforced
+on the actual serialized `JSON.stringify(state).length` as sections are
+added in priority order, not a sum of each section's own internal size —
+a section that doesn't fit is truncated (head kept, marked
+`…[truncated]`) or dropped outright if there's no room at all. Each gate call times
 out at 4s internally (8s–15s at the hook level, higher for gates that may
 make several sequential calls), so a slow or oversized state degrades to
 "emits nothing" rather than blocking you. Lower `JEV_STATE_CHARS` if you
