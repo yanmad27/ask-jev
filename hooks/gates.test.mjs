@@ -199,3 +199,8 @@ test("gate in a non-git cwd stays quiet on stderr (git's own errors aren't leake
   assert.equal(stdout, "");
   assert.equal(stderr, "");
 });
+
+test("DESTRUCTIVE.false lists Claude Code scratch dirs as reversible", async () => {
+  const { DESTRUCTIVE } = await import("../lib/gate.mjs");
+  assert.match(DESTRUCTIVE.false, /\.claude\/plans/, "must mention ~/.claude/plans/");
+});

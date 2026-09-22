@@ -225,7 +225,9 @@ không undo, không lấy lại được dữ liệu hay lòng tin:
 
 Có thể hoàn tác nên **không** destructive:
 
-- Ghi trong workspace hoặc scratch dir
+- Ghi trong workspace hoặc scratch dir (`/tmp`, `$TMPDIR`, `~/.cache`,
+  `~/.paseo/worktrees`, git worktree, `~/.claude/plans/`,
+  `~/.claude/projects/*/memory/`, `~/.claude/todos/`)
 - `git commit`/`branch`/`checkout`/`merge`/`rebase` branch local
 - `git push` lên feature branch
 - `gh pr create`/`edit`/`checks`/`merge --squash` (merge chỉ thật sự xảy ra

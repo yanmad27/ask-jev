@@ -228,7 +228,9 @@ way to get the data or trust back:
 
 Reversible, so **not** destructive:
 
-- Writes inside the workspace or a scratch dir
+- Writes inside the workspace or a scratch dir (`/tmp`, `$TMPDIR`, `~/.cache`,
+  `~/.paseo/worktrees`, git worktrees, `~/.claude/plans/`,
+  `~/.claude/projects/*/memory/`, `~/.claude/todos/`)
 - `git commit`/`branch`/`checkout`/`merge`/`rebase` of local branches
 - `git push` to a feature branch
 - `gh pr create`/`edit`/`checks`/`merge --squash` (a merge only lands once
