@@ -80,6 +80,24 @@ test("stop gate (full): blocks with an answer when the final message asks 'shoul
   assert.match(parsed.reason, /proceed/);
 });
 
+test("stop gate (full): caps consecutive auto-continue blocks at 3 (security fix)", async () => {
+  const sessionId = `cap-${Math.random()}`;
+  const responder = (keys) => {
+    if (keys.includes("incomplete")) return { incomplete: { probability: 0.2 } };
+    if (keys.includes("asksUser")) return { asksUser: { probability: 0.9 } };
+    return { resolve: { choice: "yes_proceed", probabilities: { yes_proceed: 0.9, no_stop: 0.05, needs_user: 0.05 } } };
+  };
+  const input = { session_id: sessionId, transcript_path: transcript, cwd: process.cwd(), last_assistant_message: "Should I proceed?" };
+  const outs = [];
+  for (let i = 0; i < 4; i++) {
+    const server = await dynamicStub(responder);
+    outs.push(await run("gates/stop.mjs", input, `http://127.0.0.1:${server.address().port}`, "full"));
+    server.close();
+  }
+  assert.ok(outs.slice(0, 3).every((o) => JSON.parse(o).decision === "block"), "first 3 consecutive turns auto-continue");
+  assert.equal(outs[3], "", "4th consecutive auto-continue is capped — stop proceeds instead of blocking forever");
+});
+
 test("prompt gate (full): never emits an 'ask' instruction, only proceed/assume", async () => {
   const input = { session_id: `p-${Math.random()}`, prompt: "please refactor the auth module completely", transcript_path: transcript, cwd: process.cwd() };
   for (const p of [0.9, 0.2]) {
