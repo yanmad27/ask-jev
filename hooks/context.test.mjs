@@ -81,14 +81,14 @@ test("buildState: user_past_choices puts same-cwd entries first", async () => {
   writeFileSync(logFile, `${lines.join("\n")}\n`);
   const transcript = join(cwd, "t.jsonl");
   writeFileSync(transcript, `${JSON.stringify({ type: "user", message: { content: "hi" } })}\n`);
-  const { state } = await callBuildState({ transcriptPath: transcript, cwd }, home, { JEV_LOG_FILE: logFile });
+  const { state } = await callBuildState({ transcriptPath: transcript, cwd }, home, { ASK_JEV_LOG_FILE: logFile });
   assert.equal(state.user_past_choices.choices[0].question, "Q-same");
 });
 
 async function runAnswerHook(toolResponse, logFile) {
   const script = join(repoRoot, "hooks", "ask-jev-answer.mjs");
   const input = { tool_name: "AskUserQuestion", session_id: "sess-1", cwd: "/repo", tool_response: toolResponse };
-  const child = execFileAsync("node", [script], { env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", JEV_LOG_FILE: logFile }, encoding: "utf8" });
+  const child = execFileAsync("node", [script], { env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", ASK_JEV_LOG_FILE: logFile }, encoding: "utf8" });
   child.child.stdin.end(JSON.stringify(input));
   await child;
 }
@@ -120,15 +120,15 @@ test("ask-jev-answer.mjs: parses real AskUserQuestion tool_response strings, ign
   assert.equal(events[1].kind_of_answer, "free_text");
 });
 
-test("buildState: JEV_STATE_CHARS is enforced on the real serialized state, not summed per-field estimates", async () => {
+test("buildState: ASK_JEV_STATE_CHARS is enforced on the real serialized state, not summed per-field estimates", async () => {
   const home = tmpHome();
   // 20k CLAUDE.md — way over a 1000-char cap; the old bug summed each field's own
   // internal cap (preferences alone up to 8000) and always included it regardless of
-  // JEV_STATE_CHARS, so a small cap still let an ~8.8x-oversized state through.
+  // ASK_JEV_STATE_CHARS, so a small cap still let an ~8.8x-oversized state through.
   writeFileSync(join(home, ".claude", "CLAUDE.md"), "x".repeat(20_000));
   const cwd = mkdtempSync(join(tmpdir(), "ctx-cwd6-"));
   const transcript = join(cwd, "t.jsonl");
   writeFileSync(transcript, `${JSON.stringify({ type: "user", message: { content: "hi" } })}\n`);
-  const { state } = await callBuildState({ transcriptPath: transcript, cwd }, home, { JEV_STATE_CHARS: "1000" });
+  const { state } = await callBuildState({ transcriptPath: transcript, cwd }, home, { ASK_JEV_STATE_CHARS: "1000" });
   assert.ok(JSON.stringify(state).length <= 1000, `serialized state must be <= 1000 chars, got ${JSON.stringify(state).length}`);
 });

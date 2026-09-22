@@ -98,7 +98,7 @@ stderr message (no key, malformed input, gateway error, timeout).
 - `choice`: `{ choice: "bug", probabilities: { bug: 0.94, ... }, confidence: 0.9 }`.
 - `boolean`: `{ probability: 0.97, confidence: 0.95 }` — probability of "true".
 - `confidence` summarizes how concentrated the distribution is, not
-  correctness — threshold on it (reuse `JEV_ASK_THRESHOLD`, default `0.8`);
+  correctness — threshold on it (reuse `ASK_JEV_ASK_THRESHOLD`, default `0.8`);
   below it, ask the user or gather more evidence instead of acting.
 
 ## Anti-patterns

@@ -19,6 +19,7 @@ import { createHash } from "node:crypto";
 import { apiKey, askJev, logEvent } from "../lib/jev.mjs";
 import { buildState, hasContext } from "../lib/context.mjs";
 import { truncate, autonomy, DESTRUCTIVE, FOCUS } from "../lib/gate.mjs";
+import { env } from "../lib/env.mjs";
 
 /**
  * hooks.json và self-register.mjs (xem file đó) có thể cùng đăng ký hook này, nên
@@ -39,7 +40,7 @@ function isDuplicate(input) {
   }
 }
 
-const THRESHOLD = Number(process.env.JEV_ASK_THRESHOLD ?? 0.8);
+const THRESHOLD = Number(env("ASK_THRESHOLD", 0.8));
 
 let currentSessionId;
 function logDecision(question, options, outcome, extra = {}) {

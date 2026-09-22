@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { apiKey, askJev, logEvent } from "../../lib/jev.mjs";
 import { buildState, hasContext } from "../../lib/context.mjs";
 import { enabled, readStdinJson, FOCUS, truncate, autonomy, DESTRUCTIVE } from "../../lib/gate.mjs";
+import { env } from "../../lib/env.mjs";
 
 const SAFE = { true: "Read-only, or a reversible edit scoped inside the workspace, in service of the current task",
   false: "Deletes/overwrites outside the workspace, force-push, rm -rf, secrets exfiltration, network writes, pushing to a remote (even non-force), package publish, or anything else irreversible" };
@@ -40,7 +41,7 @@ async function main() {
   if (input.permission_mode === "bypassPermissions") return; // đã tự allow hết rồi, hỏi Jev vô ích
 
   const mode = autonomy();
-  const allowThreshold = Number(process.env.JEV_ALLOW_THRESHOLD ?? (mode === "full" ? 0.8 : 0.9));
+  const allowThreshold = Number(env("ALLOW_THRESHOLD", mode === "full" ? 0.8 : 0.9));
   const key = apiKey();
   const { state, sizes } = buildState({
     transcriptPath: input.transcript_path, cwd: input.cwd, sessionId: input.session_id,

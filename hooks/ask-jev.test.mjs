@@ -26,7 +26,7 @@ function stub(handler) {
 }
 async function runRaw(input, url) {
   const child = execFileAsync("node", ["hooks/ask-jev.mjs"], {
-    env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", JEV_GATEWAY_URL: url, JEV_LOG_FILE: logFile },
+    env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile },
     encoding: "utf8",
   });
   child.child.stdin.end(JSON.stringify(input));
@@ -56,7 +56,7 @@ test("partial answers: resolved question denies, unresolved re-asked", async () 
   assert.ok(decisions.some((d) => d.question === "Resolved?" && d.outcome === "answered" && d.label === "A"));
   assert.ok(decisions.some((d) => d.question === "Unresolved?" && d.outcome === "low_confidence"));
 
-  const { stdout } = await execFileAsync("node", ["bin/jev.mjs", "stats", "--json"], { env: { ...process.env, JEV_LOG_FILE: logFile } });
+  const { stdout } = await execFileAsync("node", ["bin/jev.mjs", "stats", "--json"], { env: { ...process.env, ASK_JEV_LOG_FILE: logFile } });
   const summary = JSON.parse(stdout);
   assert.equal(summary.decisions.by_outcome.answered, decisions.filter((d) => d.outcome === "answered").length);
   assert.equal(summary.decisions.by_outcome.low_confidence, decisions.filter((d) => d.outcome === "low_confidence").length);
@@ -148,7 +148,7 @@ test("lib/jev.mjs: askJev retries once on a 5xx gateway response, logs retried:t
     + "const a = await askJev('dummy', {x:1}, {ok:{type:'boolean',instructions:{question:'q',focus:'f'},criteria:{true:'t',false:'f'}}}, 'test', 2000); "
     + "process.stdout.write(JSON.stringify(a)); });";
   const { stdout } = await execFileAsync("node", ["-e", script], {
-    env: { ...process.env, JEV_GATEWAY_URL: url, JEV_LOG_FILE: logFile },
+    env: { ...process.env, ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile },
     encoding: "utf8",
   });
   server.close();
@@ -172,7 +172,7 @@ test("lib/jev.mjs: a hanging gateway response stays within the requested budget"
     + `const t0 = Date.now(); try { await askJev('dummy', {x:1}, {ok:{type:'boolean',instructions:{question:'q',focus:'f'},criteria:{true:'t',false:'f'}}}, 'test', ${budgetMs}); } catch {} `
     + "process.stdout.write(String(Date.now() - t0)); });";
   const { stdout } = await execFileAsync("node", ["-e", script], {
-    env: { ...process.env, JEV_GATEWAY_URL: url, JEV_LOG_FILE: logFile },
+    env: { ...process.env, ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile },
     encoding: "utf8",
   });
   server.close();

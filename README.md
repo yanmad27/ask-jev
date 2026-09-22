@@ -121,8 +121,8 @@ because a sibling question stayed unclear.
 
 `multiSelect` questions go through Jev too: each option becomes its own
 yes/no question ("does this option apply?") instead of one pick. An option
-counts as selected once its probability clears `JEV_ASK_THRESHOLD`, rejected
-once it drops below `1 - JEV_ASK_THRESHOLD`, and the whole question stays
+counts as selected once its probability clears `ASK_JEV_ASK_THRESHOLD`, rejected
+once it drops below `1 - ASK_JEV_ASK_THRESHOLD`, and the whole question stays
 unresolved if any option lands in between. A resolved answer is the
 comma-joined list of selected labels — possibly "none".
 
@@ -131,7 +131,7 @@ comma-joined list of selected labels — possibly "none".
 | Condition | Why |
 |---|---|
 | the question is personal (`personal > 0.5`) | that's your call, not the model's |
-| Jev isn't confident enough (`< JEV_ASK_THRESHOLD`) | guessing is worse than asking |
+| Jev isn't confident enough (`< ASK_JEV_ASK_THRESHOLD`) | guessing is worse than asking |
 | an option has no description | a bare label isn't something Jev can judge — bounced back to Claude, not forwarded to Jev |
 | no usable context in the transcript | nothing for Jev to judge against |
 | no key set, Jev errors, or it takes over 8s | a broken helper must never be the reason you can't answer |
@@ -148,7 +148,7 @@ silent if no API key is configured.
 
 Since a session-start reminder tends to get forgotten a dozen turns in, the
 `prompt` gate (below) re-injects the same one-line rule on **every** turn via
-a `UserPromptSubmit` hook. Set `JEV_REMIND=0` to turn it off (e.g. if you
+a `UserPromptSubmit` hook. Set `ASK_JEV_REMIND=0` to turn it off (e.g. if you
 find it repetitive); it's already silent with no API key configured.
 
 Beyond auto-answering `AskUserQuestion`, Claude can consult Jev for *any*
@@ -198,11 +198,11 @@ criteria that are observable and mutually exclusive — with worked examples.
 Beyond auto-answering `AskUserQuestion`, four hooks ask Jev proactively at
 the moments a human reviewer would actually weigh in — no explicit judgement
 call needed from Claude. Each is on by default and can be turned off
-individually with `JEV_GATES` (comma list; `JEV_GATES=` disables all four).
+individually with `ASK_JEV_GATES` (comma list; `ASK_JEV_GATES=` disables all four).
 
 | Gate | Fires on | Jev judges | Effect |
 |---|---|---|---|
-| `permission` | `PreToolUse` (Bash/Edit/Write/MultiEdit/NotebookEdit) | Is this safe to run without asking? | `p ≥ JEV_ALLOW_THRESHOLD` → auto-allow; `p ≤ 0.2` → force an ask; in between, a second `destructive` check decides allow-or-ask (no silent "unsure" bucket) |
+| `permission` | `PreToolUse` (Bash/Edit/Write/MultiEdit/NotebookEdit) | Is this safe to run without asking? | `p ≥ ASK_JEV_ALLOW_THRESHOLD` → auto-allow; `p ≤ 0.2` → force an ask; in between, a second `destructive` check decides allow-or-ask (no silent "unsure" bucket) |
 | `stop` | `Stop` | Did the assistant stop with work still owed? | `p ≥ 0.85` → blocks with a reason. In [full autonomy](#4-autonomy), also resolves a trailing "should I…?" on the user's behalf |
 | `bash` | `PostToolUse` (Bash) | success / error / tests_failed / needs_attention | Non-`success` at `p ≥ 0.8` adds one line of context for Claude |
 | `prompt` | `UserPromptSubmit` | Is the prompt ambiguous? (skipped under 12 chars or starting with `/`) | Safe mode: a clarify-with-the-user warning at `p ≥ 0.85`. [Full autonomy](#4-autonomy): never asks — proceeds on the literal reading or states an assumption |
@@ -248,7 +248,7 @@ Every field is either the user's own words (messages), their own files
 logs every real answer). A static test enforces this: no gate is allowed to
 build a `preferences`/`user_*` field from a string literal.
 
-The whole thing is capped at `JEV_STATE_CHARS` (default `100000` — a real
+The whole thing is capped at `ASK_JEV_STATE_CHARS` (default `100000` — a real
 ~33k-character state measured ~1.8s round-trip and a real 90k-character
 state still got a clean 200; the gateway documents no limit, so this is a
 self-imposed ceiling with margin, not a measured wall). The cap is enforced
@@ -262,7 +262,7 @@ never blows the budget — and the `hooks.json` timeout for each hook is set
 to `budget/1000 + 1s` margin per sequential call a gate might make (6s for
 the single-call gates, 16s for `stop`'s up to three, 10s for `ask-jev.mjs`).
 A slow or oversized state degrades to "emits nothing" rather than blocking
-you. Lower `JEV_STATE_CHARS` if you want snappier gates at the cost of less
+you. Lower `ASK_JEV_STATE_CHARS` if you want snappier gates at the cost of less
 context. Every call logs the size in
 characters of each section as `state_sizes` — never the content — so the
 budget can be tuned from `bin/jev.mjs stats` without exposing anything.
@@ -272,7 +272,7 @@ timeout means the gate is silent — never a blocker.
 
 ## 4. Autonomy
 
-`JEV_AUTONOMY` controls how much ask-jev acts instead of asking you —
+`ASK_JEV_AUTONOMY` controls how much ask-jev acts instead of asking you —
 **`full` is the default**; set it to `safe` to go back to the pre-autonomy
 behavior (Jev only ever auto-*answers* on your behalf, never proceeds past a
 question or a stop on its own).
@@ -300,7 +300,7 @@ What changes in `full`:
   blocked with Jev's answer and an instruction not to ask again; already
   satisfied → the stop proceeds; destructive or genuinely your call → the
   stop proceeds so the question actually reaches you.
-- **`permission` gate** — the allow threshold is `JEV_ALLOW_THRESHOLD`
+- **`permission` gate** — the allow threshold is `ASK_JEV_ALLOW_THRESHOLD`
   (default `0.8` in `full`, `0.9` in `safe`) instead of a fixed `0.9`.
 
 Every autonomous decision is still logged with the same `label` +
@@ -310,8 +310,8 @@ it's just no longer routed through you.
 ## Usage analytics
 
 Every gateway call and every hook decision is appended as one JSON line to
-`~/.claude/ask-jev.log` (override the path with `JEV_LOG_FILE`, disable
-entirely with `JEV_LOG=0`). Each decision line carries which `gate` produced
+`~/.claude/ask-jev.log` (override the path with `ASK_JEV_LOG_FILE`, disable
+entirely with `ASK_JEV_LOG=0`). Each decision line carries which `gate` produced
 it (`ask`, `permission`, `stop`, `bash`, `prompt`), Jev's answer as a
 `label` + `confidence`, and a short `reason` — the criterion text Jev
 matched, never the conversation transcript or the `state` payload sent to
@@ -377,14 +377,17 @@ All optional — sensible defaults out of the box.
 | Variable | Default | |
 |---|---|---|
 | `AI_GATEWAY_API_KEY` | reads `~/.claude/ask-jev.key` | your Vercel AI Gateway key |
-| `JEV_ASK_THRESHOLD` | `0.8` | lower it to let Jev answer more often (and be wrong more often) |
-| `JEV_REMIND` | (on) | set to `0` to stop the per-turn "ask Jev" reminder |
-| `JEV_GATES` | `permission,stop,bash,prompt` | comma list of enabled [automatic gates](#3-automatic-gates); empty disables all |
-| `JEV_STATE_CHARS` | `100000` | max characters of context sent to Jev per gate call — lower for faster/cheaper gates |
-| `JEV_AUTONOMY` | `full` | [autonomy mode](#4-autonomy); set to `safe` to only ever auto-answer, never proceed on its own |
-| `JEV_ALLOW_THRESHOLD` | `0.8` full / `0.9` safe | `permission` gate's auto-allow threshold |
-| `JEV_MODEL` | `typesafe-ai/jev` | which model Jev evaluation runs against |
-| `JEV_GATEWAY_URL` | Vercel's evaluation endpoint | only needed for a custom gateway |
+| `ASK_JEV_API_KEY` | — | alias for `AI_GATEWAY_API_KEY`, checked first |
+| `ASK_JEV_ASK_THRESHOLD` | `0.8` | lower it to let Jev answer more often (and be wrong more often) |
+| `ASK_JEV_REMIND` | (on) | set to `0` to stop the per-turn "ask Jev" reminder |
+| `ASK_JEV_GATES` | `permission,stop,bash,prompt` | comma list of enabled [automatic gates](#3-automatic-gates); empty disables all |
+| `ASK_JEV_STATE_CHARS` | `100000` | max characters of context sent to Jev per gate call — lower for faster/cheaper gates |
+| `ASK_JEV_AUTONOMY` | `full` | [autonomy mode](#4-autonomy); set to `safe` to only ever auto-answer, never proceed on its own |
+| `ASK_JEV_ALLOW_THRESHOLD` | `0.8` full / `0.9` safe | `permission` gate's auto-allow threshold |
+| `ASK_JEV_MODEL` | `typesafe-ai/jev` | which model Jev evaluation runs against |
+| `ASK_JEV_GATEWAY_URL` | Vercel's evaluation endpoint | only needed for a custom gateway |
+
+`JEV_*` names still work but are deprecated.
 
 The legacy key path `~/.claude/jev-ask.key` (from before the plugin was
 renamed) is still read as a fallback, so nothing breaks if you set it up

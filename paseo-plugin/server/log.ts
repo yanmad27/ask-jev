@@ -57,7 +57,7 @@ function loadEvents(path: string): LogEvent[] | null {
 }
 
 function logPath(): string {
-  return process.env.JEV_LOG_FILE || join(homedir(), ".claude", "ask-jev.log");
+  return process.env.ASK_JEV_LOG_FILE || process.env.JEV_LOG_FILE || join(homedir(), ".claude", "ask-jev.log");
 }
 
 function emptyStats(path: string): JevStats {

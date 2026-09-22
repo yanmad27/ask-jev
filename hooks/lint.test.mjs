@@ -27,6 +27,19 @@ test("no criteria bucket named undetermined/unsure/other/unknown (real regressio
   assert.deepEqual(offenders, []);
 });
 
+test("only lib/env.mjs reads legacy JEV_-prefixed env vars directly — everything else goes through env()", () => {
+  const offenders = [];
+  const pattern = /process\.env\.JEV_/;
+  for (const path of files) {
+    if (path === join("lib", "env.mjs")) continue;
+    const lines = readFileSync(path, "utf8").split("\n");
+    lines.forEach((line, i) => {
+      if (pattern.test(line)) offenders.push(`${path}:${i + 1}: ${line.trim()}`);
+    });
+  }
+  assert.deepEqual(offenders, []);
+});
+
 test("no gate hand-writes a preferences/user_* string literal (evidence only — lib/context.mjs is the only source, from real files/logs)", () => {
   const offenders = [];
   const literalPattern = /\b(preferences|user_\w+)\s*[:=]\s*["'`]/;

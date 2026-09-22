@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { apiKey, askJev, logEvent } from "../../lib/jev.mjs";
 import { buildState, hasContext } from "../../lib/context.mjs";
 import { enabled, readStdinJson, FOCUS, truncate, autonomy } from "../../lib/gate.mjs";
+import { env } from "../../lib/env.mjs";
 
 const jevPath = fileURLToPath(new URL("../../bin/jev.mjs", import.meta.url));
 const REMINDER = `Reminder: before classifying / choosing among options / yes-no on evidence, ask Jev: echo '<json>' | node "${jevPath}" (skill ask-jev). Personal taste or irreversible actions → ask the user. When the user defers a choice to you/Jev, ask Jev which option the user would pick — no "undetermined" option. Never write your own description of the user into state — only raw evidence. In full autonomy: do not ask the user; state assumptions and proceed unless destructive.`;
@@ -65,7 +66,7 @@ async function judgePrompt(input) {
 async function main() {
   const input = readStdinJson();
   const lines = [];
-  if (process.env.JEV_REMIND !== "0" && apiKey()) lines.push(REMINDER);
+  if (env("REMIND") !== "0" && apiKey()) lines.push(REMINDER);
   if (input) {
     const warning = await judgePrompt(input);
     if (warning) lines.push(warning);

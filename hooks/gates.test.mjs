@@ -30,7 +30,7 @@ async function runGateFull(name, input, url, gates = name, cwd, mode = "safe") {
   const script = fileURLToPath(new URL(`gates/${name}.mjs`, import.meta.url));
   const child = execFileAsync("node", [script], {
     cwd,
-    env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", JEV_GATEWAY_URL: url, JEV_LOG_FILE: logFile, JEV_GATES: gates, JEV_REMIND: "0", JEV_AUTONOMY: mode },
+    env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile, ASK_JEV_GATES: gates, ASK_JEV_REMIND: "0", ASK_JEV_AUTONOMY: mode },
     encoding: "utf8",
   });
   child.child.stdin.end(JSON.stringify(input));
@@ -120,12 +120,32 @@ test("prompt gate: ambiguity warning at p=0.9; decision log populated", async ()
   assert.equal(d.label, "ambiguous");
 });
 
-test("all four gates emit nothing when JEV_GATES= is empty", async () => {
+test("all four gates emit nothing when ASK_JEV_GATES= is empty", async () => {
   const server = await stub({ safe: { probability: 0.95 }, incomplete: { probability: 0.95 }, result: { choice: "error", probabilities: { error: 0.95 } } });
   const url = `http://127.0.0.1:${server.address().port}`;
   for (const [name, input] of [["permission", editInput], ["stop", stopInput], ["bash", bashInput], ["prompt", promptInput]]) {
     assert.equal(await runGate(name, input, url, ""), "");
   }
+  server.close();
+});
+
+test("legacy JEV_GATES= alone still disables gates; ASK_JEV_GATES wins when both are set", async () => {
+  const server = await stub({ safe: { probability: 0.95 }, destructive: { probability: 0.1 } });
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const script = fileURLToPath(new URL("gates/permission.mjs", import.meta.url));
+
+  async function runWithEnv(extraEnv) {
+    const child = execFileAsync("node", [script], {
+      env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile, ASK_JEV_REMIND: "0", ...extraEnv },
+      encoding: "utf8",
+    });
+    child.child.stdin.end(JSON.stringify(editInput));
+    return (await child).stdout;
+  }
+
+  assert.equal(await runWithEnv({ JEV_GATES: "" }), "");
+  assert.match(await runWithEnv({ JEV_GATES: "", ASK_JEV_GATES: "permission" }), /"permissionDecision":"allow"/);
+
   server.close();
 });
 

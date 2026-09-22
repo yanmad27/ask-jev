@@ -119,8 +119,8 @@ cạnh còn mập mờ.
 
 Câu hỏi `multiSelect` cũng qua Jev: mỗi lựa chọn thành một câu hỏi có/không
 riêng ("lựa chọn này có áp dụng không?") thay vì một câu chọn duy nhất. Một
-lựa chọn được chọn khi xác suất vượt `JEV_ASK_THRESHOLD`, bị loại khi xuống
-dưới `1 - JEV_ASK_THRESHOLD`, còn cả câu hỏi vẫn chưa giải quyết nếu có lựa
+lựa chọn được chọn khi xác suất vượt `ASK_JEV_ASK_THRESHOLD`, bị loại khi xuống
+dưới `1 - ASK_JEV_ASK_THRESHOLD`, còn cả câu hỏi vẫn chưa giải quyết nếu có lựa
 chọn nằm lửng lơ ở giữa. Đáp án đã giải quyết là danh sách nhãn được chọn nối
 bằng dấu phẩy — có thể là "none".
 
@@ -129,7 +129,7 @@ bằng dấu phẩy — có thể là "none".
 | Điều kiện | Vì sao |
 |---|---|
 | câu hỏi là chuyện riêng (`personal > 0.5`) | quyền của bạn, không phải của model |
-| Jev không đủ chắc (`< JEV_ASK_THRESHOLD`) | đoán mò thì thà hỏi còn hơn |
+| Jev không đủ chắc (`< ASK_JEV_ASK_THRESHOLD`) | đoán mò thì thà hỏi còn hơn |
 | có lựa chọn thiếu description | nhãn trần không phải thứ Jev phán đoán được — trả về cho Claude, không đưa cho Jev |
 | transcript không có ngữ cảnh dùng được | không có gì cho Jev chấm |
 | không có khoá, Jev lỗi, hoặc quá 8 giây | một helper hỏng không bao giờ được phép là lý do bạn không trả lời được |
@@ -145,7 +145,7 @@ hook khai trong plugin không chạy (xem Ghi chú triển khai), và
 
 Nhắc một lần đầu phiên rất dễ bị quên sau vài chục lượt, nên gate `prompt`
 (bên dưới) tiêm lại đúng một dòng luật đó ở **mỗi** lượt qua hook
-`UserPromptSubmit`. Đặt `JEV_REMIND=0` để tắt (ví dụ thấy lặp lại phiền); nó
+`UserPromptSubmit`. Đặt `ASK_JEV_REMIND=0` để tắt (ví dụ thấy lặp lại phiền); nó
 cũng tự im lặng nếu chưa có khoá API.
 
 Không chỉ tự trả lời `AskUserQuestion`, Claude còn có thể hỏi Jev cho *bất kỳ*
@@ -194,12 +194,12 @@ sát được và loại trừ lẫn nhau — kèm ví dụ cụ thể.
 
 Ngoài tự trả lời `AskUserQuestion`, bốn hook chủ động hỏi Jev đúng lúc một
 người review thật sẽ lên tiếng — Claude không cần tự nhận ra đây là một
-quyết định cần hỏi. Cả bốn bật sẵn, tắt riêng từng cái bằng `JEV_GATES`
-(danh sách phẩy; `JEV_GATES=` tắt hết).
+quyết định cần hỏi. Cả bốn bật sẵn, tắt riêng từng cái bằng `ASK_JEV_GATES`
+(danh sách phẩy; `ASK_JEV_GATES=` tắt hết).
 
 | Gate | Chạy lúc | Jev phán | Kết quả |
 |---|---|---|---|
-| `permission` | `PreToolUse` (Bash/Edit/Write/MultiEdit/NotebookEdit) | Việc này chạy không cần hỏi có an toàn không? | `p ≥ JEV_ALLOW_THRESHOLD` → tự allow; `p ≤ 0.2` → ép hỏi lại; ở giữa, hỏi thêm `destructive` để quyết allow hay ask (không còn bucket "unsure" im lặng) |
+| `permission` | `PreToolUse` (Bash/Edit/Write/MultiEdit/NotebookEdit) | Việc này chạy không cần hỏi có an toàn không? | `p ≥ ASK_JEV_ALLOW_THRESHOLD` → tự allow; `p ≤ 0.2` → ép hỏi lại; ở giữa, hỏi thêm `destructive` để quyết allow hay ask (không còn bucket "unsure" im lặng) |
 | `stop` | `Stop` | Claude dừng khi việc còn dang dở không? | `p ≥ 0.85` → chặn dừng kèm lý do. Ở [tự trị full](#4-tự-trị), còn tự trả lời thay nếu câu cuối hỏi xin phép |
 | `bash` | `PostToolUse` (Bash) | success / error / tests_failed / needs_attention | Không phải `success` với `p ≥ 0.8` → gắn thêm một dòng ngữ cảnh cho Claude |
 | `prompt` | `UserPromptSubmit` | Prompt có mập mờ không? (bỏ qua nếu dưới 12 ký tự hoặc bắt đầu bằng `/`) | Safe: cảnh báo hỏi lại người dùng nếu `p ≥ 0.85`. [Tự trị full](#4-tự-trị): không bao giờ hỏi — chạy theo nghĩa đen hoặc nêu giả định rồi làm luôn |
@@ -245,7 +245,7 @@ chạy. Mỗi field hoặc là lời người dùng tự viết (tin nhắn), fi
 mọi câu trả lời thật). Một test tĩnh ép luật này: không gate nào được xây
 field `preferences`/`user_*` từ một chuỗi literal.
 
-Tất cả bị chặn ở `JEV_STATE_CHARS` (mặc định `100000` — một state thật ~33
+Tất cả bị chặn ở `ASK_JEV_STATE_CHARS` (mặc định `100000` — một state thật ~33
 nghìn ký tự đo được khoảng 1.8s round-trip, và một state thật 90 nghìn ký tự
 vẫn 200 sạch; gateway không công bố giới hạn nào nên đây là trần tự đặt có
 biên an toàn, không phải bức tường đo được thật). Trần này ép trên kích
@@ -258,7 +258,7 @@ của `ask-jev.mjs` là 8s) — tự chia đôi thành 2 attempt ~1850ms để d
 mỗi hook đặt bằng `budget/1000 + 1s` margin nhân với số lần gọi tuần tự gate
 đó có thể làm (6s cho gate chỉ gọi 1 lần, 16s cho `stop` gọi tối đa 3 lần,
 10s cho `ask-jev.mjs`). State chậm hoặc quá khổ chỉ khiến gate "im lặng"
-chứ không chặn bạn. Hạ `JEV_STATE_CHARS` nếu muốn gate nhanh hơn, đổi lại
+chứ không chặn bạn. Hạ `ASK_JEV_STATE_CHARS` nếu muốn gate nhanh hơn, đổi lại
 ít ngữ cảnh hơn. Mỗi lần
 gọi đều log kích thước từng phần bằng ký tự dưới dạng `state_sizes` — không
 bao giờ log nội dung — để tinh chỉnh ngân sách từ `bin/jev.mjs stats` mà
@@ -269,7 +269,7 @@ timeout đều khiến gate im lặng — không bao giờ chặn bạn.
 
 ## 4. Tự trị
 
-`JEV_AUTONOMY` quyết định ask-jev tự làm thay bao nhiêu thay vì hỏi bạn —
+`ASK_JEV_AUTONOMY` quyết định ask-jev tự làm thay bao nhiêu thay vì hỏi bạn —
 **`full` là mặc định**; đặt `safe` để quay lại hành vi trước autonomy (Jev
 chỉ bao giờ tự *trả lời* thay bạn, không bao giờ tự chạy tiếp qua một câu
 hỏi hay một lần dừng).
@@ -296,7 +296,7 @@ Full thay đổi gì:
   lời được và không destructive → chặn dừng lại kèm đáp án của Jev và lệnh
   không hỏi lại; đã xong việc rồi → cho dừng; destructive hoặc thật sự là
   chuyện của bạn → cho dừng để câu hỏi thật sự tới tay bạn.
-- **Gate `permission`** — ngưỡng allow là `JEV_ALLOW_THRESHOLD` (mặc định
+- **Gate `permission`** — ngưỡng allow là `ASK_JEV_ALLOW_THRESHOLD` (mặc định
   `0.8` ở `full`, `0.9` ở `safe`) thay vì cố định `0.9`.
 
 Mọi quyết định tự trị vẫn được log với đúng dạng `label` + `confidence` +
@@ -306,8 +306,8 @@ Mọi quyết định tự trị vẫn được log với đúng dạng `label` 
 ## Thống kê sử dụng
 
 Mỗi lần gọi gateway và mỗi quyết định của hook được ghi thành một dòng JSON
-vào `~/.claude/ask-jev.log` (đổi đường dẫn bằng `JEV_LOG_FILE`, tắt hẳn bằng
-`JEV_LOG=0`). Mỗi dòng quyết định mang theo `gate` nào tạo ra nó (`ask`,
+vào `~/.claude/ask-jev.log` (đổi đường dẫn bằng `ASK_JEV_LOG_FILE`, tắt hẳn bằng
+`ASK_JEV_LOG=0`). Mỗi dòng quyết định mang theo `gate` nào tạo ra nó (`ask`,
 `permission`, `stop`, `bash`, `prompt`), đáp án của Jev dạng `label` +
 `confidence`, và một `reason` ngắn — đúng phần tiêu chí Jev khớp — không bao
 giờ ghi transcript hội thoại hay payload `state` gửi cho Jev.
@@ -371,14 +371,17 @@ Tất cả đều tuỳ chọn — mặc định đã hợp lý sẵn.
 | Biến | Mặc định | |
 |---|---|---|
 | `AI_GATEWAY_API_KEY` | đọc `~/.claude/ask-jev.key` | khoá Vercel AI Gateway của bạn |
-| `JEV_ASK_THRESHOLD` | `0.8` | hạ xuống để Jev tự trả lời nhiều hơn (và cũng sai nhiều hơn) |
-| `JEV_REMIND` | (bật) | đặt `0` để tắt lời nhắc "hỏi Jev" mỗi lượt |
-| `JEV_GATES` | `permission,stop,bash,prompt` | danh sách phẩy các [cổng tự động](#3-cổng-tự-động) đang bật; rỗng thì tắt hết |
-| `JEV_STATE_CHARS` | `100000` | số ký tự ngữ cảnh tối đa gửi cho Jev mỗi lần gọi gate — hạ xuống để gate nhanh/rẻ hơn |
-| `JEV_AUTONOMY` | `full` | [mode tự trị](#4-tự-trị); đặt `safe` để chỉ tự trả lời thay, không bao giờ tự chạy tiếp |
-| `JEV_ALLOW_THRESHOLD` | `0.8` full / `0.9` safe | ngưỡng tự allow của gate `permission` |
-| `JEV_MODEL` | `typesafe-ai/jev` | model nào Jev dùng để đánh giá |
-| `JEV_GATEWAY_URL` | endpoint đánh giá của Vercel | chỉ cần đổi nếu dùng gateway riêng |
+| `ASK_JEV_API_KEY` | — | tên khác của `AI_GATEWAY_API_KEY`, được kiểm tra trước |
+| `ASK_JEV_ASK_THRESHOLD` | `0.8` | hạ xuống để Jev tự trả lời nhiều hơn (và cũng sai nhiều hơn) |
+| `ASK_JEV_REMIND` | (bật) | đặt `0` để tắt lời nhắc "hỏi Jev" mỗi lượt |
+| `ASK_JEV_GATES` | `permission,stop,bash,prompt` | danh sách phẩy các [cổng tự động](#3-cổng-tự-động) đang bật; rỗng thì tắt hết |
+| `ASK_JEV_STATE_CHARS` | `100000` | số ký tự ngữ cảnh tối đa gửi cho Jev mỗi lần gọi gate — hạ xuống để gate nhanh/rẻ hơn |
+| `ASK_JEV_AUTONOMY` | `full` | [mode tự trị](#4-tự-trị); đặt `safe` để chỉ tự trả lời thay, không bao giờ tự chạy tiếp |
+| `ASK_JEV_ALLOW_THRESHOLD` | `0.8` full / `0.9` safe | ngưỡng tự allow của gate `permission` |
+| `ASK_JEV_MODEL` | `typesafe-ai/jev` | model nào Jev dùng để đánh giá |
+| `ASK_JEV_GATEWAY_URL` | endpoint đánh giá của Vercel | chỉ cần đổi nếu dùng gateway riêng |
+
+Tên `JEV_*` cũ vẫn dùng được nhưng đã deprecated.
 
 File khoá cũ `~/.claude/jev-ask.key` (từ trước khi plugin đổi tên) vẫn được
 đọc như phương án dự phòng, nên không có gì hỏng nếu bạn từng đặt theo tên cũ.

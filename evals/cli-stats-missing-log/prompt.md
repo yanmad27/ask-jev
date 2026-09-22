@@ -11,5 +11,5 @@ First invoke the ask-jev skill just to learn the absolute path to this plugin's
 in place of `<jev.mjs>`, run this exact command and report its full stdout verbatim:
 
 ```
-JEV_LOG_FILE=./tmp-eval-missing.log node <jev.mjs> stats
+ASK_JEV_LOG_FILE=./tmp-eval-missing.log node <jev.mjs> stats
 ```
