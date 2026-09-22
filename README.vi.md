@@ -282,6 +282,24 @@ Commit theo [Conventional Commits](https://www.conventionalcommits.org)
 (`feat:`/`fix:`/`docs:`…) — release-please tự mở PR release, tự tăng version
 trong `plugin.json` và gắn tag khi merge, không cần tag tay.
 
+### Evals
+
+`skills/ask-jev` và các hook được kiểm bằng các case `claude plugin eval`
+trong `evals/` — trigger evals (skill có chạy đúng lúc không, và im lặng
+đúng lúc không), behaviour rubrics (evidence phải verbatim, không có bucket
+`undetermined`, không tự bịa sở thích người dùng), và CLI contract cho
+`bin/jev.mjs`. Chạy ở máy bằng:
+
+```
+./scripts/eval.sh --trust-plugin
+```
+
+Mỗi case sinh ra một agent Claude Code thật, nên cần `claude` đã đăng nhập
+(hoặc `ANTHROPIC_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN` trong environment). Job
+`.github/workflows/evals.yml` chạy lại bộ eval mỗi tuần nếu có secret
+`CLAUDE_CODE_OAUTH_TOKEN` hoặc `ANTHROPIC_API_KEY` trong repo, không có thì
+bỏ qua gọn gàng — job này không bao giờ chặn CI của pull request.
+
 ## Ghi chú triển khai
 
 <details>

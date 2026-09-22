@@ -1,0 +1,16 @@
+{
+  "state": {
+    "ticket": "App bị crash mỗi khi tôi mở màn hình cài đặt sau khi cập nhật lên bản mới nhất."
+  },
+  "questions": {
+    "category": {
+      "type": "choice",
+      "instructions": { "question": "Which category does `ticket` belong to?", "focus": "Classify what's reported, not how urgent it sounds." },
+      "criteria": {
+        "bug": { "what": "A defect in existing behavior — something that used to work and now doesn't", "not_for": "feature_request, question", "examples": ["app crashes on launch"] },
+        "feature_request": { "what": "A request for new behavior that never existed", "not_for": "bug, question", "examples": ["please add dark mode"] },
+        "question": { "what": "The customer wants to understand something, no defect implied", "not_for": "bug, feature_request", "examples": ["how do I export my data"] }
+      }
+    }
+  }
+}

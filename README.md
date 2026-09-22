@@ -289,6 +289,24 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org)
 (`feat:`/`fix:`/`docs:`…) — release-please opens a release PR that bumps
 `plugin.json` and tags on merge, so there's no manual tagging.
 
+### Evals
+
+`skills/ask-jev` and the hooks are covered by `claude plugin eval` cases
+under `evals/` — trigger evals (does the skill fire when it should, and stay
+quiet when it shouldn't), behaviour rubrics (evidence verbatim, no
+`undetermined` bucket, no invented preferences), and CLI contract checks for
+`bin/jev.mjs`. Run them locally with:
+
+```
+./scripts/eval.sh --trust-plugin
+```
+
+Each case spawns a real Claude Code agent, so you need a logged-in `claude`
+(or `ANTHROPIC_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN` in the environment). A
+weekly `.github/workflows/evals.yml` job reruns the suite given a
+`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` repo secret, or skips
+cleanly without one — it never gates pull request CI.
+
 ## Implementation notes
 
 <details>
