@@ -1,6 +1,6 @@
 # ask-jev Paseo plugin
 
-Workspace panel for the ask-jev usage log: call/latency tiles, outcome breakdown, live table. Reads `$JEV_LOG_FILE` (default `~/.claude/ask-jev.log`), polls every 2s.
+Workspace panel for the ask-jev usage log: call/latency tiles, outcome breakdown, live table. Reads `$JEV_LOG_FILE` (default `~/.claude/ask-jev.log`), polls every 2s. Click a row for the full record.
 
 Reuses [`../lib/stats.mjs`](../lib/stats.mjs) (same code as `bin/jev.mjs stats`), committed as `shared/stats.mjs` since Paseo stages only `paseo-plugin/`.
 
