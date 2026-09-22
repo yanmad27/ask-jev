@@ -56,6 +56,8 @@ thường. Không có gì bị ảnh hưởng.
 
 ## Nâng cấp
 
+### Claude Code
+
 1. Làm mới marketplace:
 
    ```
@@ -71,6 +73,10 @@ thường. Không có gì bị ảnh hưởng.
 File khoá được đổi tên `jev-ask.key` → `ask-jev.key`; tên cũ vẫn được đọc như
 phương án dự phòng, nên không cần chuyển gì cả. Khởi động lại Claude Code sau
 khi nâng cấp — hook chỉ nạp lại khi vào phiên mới.
+
+### Plugin Paseo
+
+`paseo plugin update ask-jev`, rồi Cmd+R / khởi động lại Paseo.
 
 ## 1. Tự trả lời `AskUserQuestion`
 

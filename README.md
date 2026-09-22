@@ -57,6 +57,8 @@ asks you exactly as it always has. Nothing to break.
 
 ## Upgrade
 
+### Claude Code
+
 1. Refresh the marketplace:
 
    ```
@@ -72,6 +74,10 @@ asks you exactly as it always has. Nothing to break.
 The key file was renamed `jev-ask.key` → `ask-jev.key`; the old name is still
 read as a fallback, so there's nothing to migrate. Restart Claude Code after
 upgrading — hooks only reload on a fresh session.
+
+### Paseo plugin
+
+`paseo plugin update ask-jev` (fetches latest main, then reload). Then Cmd+R / restart Paseo so the UI loads the new client bundle.
 
 ## 1. Auto-answer `AskUserQuestion`
 
