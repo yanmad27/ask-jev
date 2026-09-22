@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/yanmad27/ask-jev/compare/v0.6.0...v0.7.0) (2026-09-22)
+
+
+### Features
+
+* **paseo-plugin:** click a row to see the full decision record ([#16](https://github.com/yanmad27/ask-jev/issues/16)) ([1206e83](https://github.com/yanmad27/ask-jev/commit/1206e833abaff4916174ac98a2c4614d4c0754e8))
+
 ## [0.6.0](https://github.com/yanmad27/ask-jev/compare/v0.5.0...v0.6.0) (2026-09-22)
 
 

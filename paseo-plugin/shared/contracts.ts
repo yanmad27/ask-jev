@@ -52,3 +52,9 @@ export const jevStatsRpc = defineRpc({
 });
 
 export type JevStats = z.infer<typeof jevStatsRpc.output>;
+
+export const jevDecisionRpc = defineRpc({
+  name: "ask-jev.decision",
+  input: z.object({ ts: z.string(), gate: z.string().optional() }),
+  output: z.record(z.string(), z.unknown()).nullable(),
+});

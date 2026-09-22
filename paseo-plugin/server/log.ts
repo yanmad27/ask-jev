@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { RpcInput } from "@getpaseo/plugin";
 import { computeStats, filterSince, parseEvents, recentDecisions, sinceMsFromSpec } from "../shared/stats.mjs";
 import type { JevStats } from "../shared/contracts";
-import { jevStatsRpc } from "../shared/contracts";
+import { jevDecisionRpc, jevStatsRpc } from "../shared/contracts";
 
 const RECENT_LIMIT = 200;
 
@@ -101,4 +101,12 @@ export function getStats({ since, outcome, gate }: RpcInput<typeof jevStatsRpc>)
       reason: d.reason,
     })),
   };
+}
+
+/** Full raw log line for a row, keyed by ts+gate — reads the same cache getStats() populates. */
+export function getDecision({ ts, gate }: RpcInput<typeof jevDecisionRpc>): Record<string, unknown> | null {
+  const events = loadEvents(logPath());
+  if (!events) return null;
+  const match = events.find((e) => e.ts === ts && (e.gate ?? "") === (gate ?? ""));
+  return (match as unknown as Record<string, unknown>) ?? null;
 }
