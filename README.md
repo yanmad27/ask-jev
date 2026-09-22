@@ -57,10 +57,17 @@ asks you exactly as it always has. Nothing to break.
 
 ## Upgrade
 
-```
-/plugin marketplace update ask-jev
-/plugin update ask-jev@ask-jev
-```
+1. Refresh the marketplace:
+
+   ```
+   /plugin marketplace update ask-jev
+   ```
+
+2. Update the plugin:
+
+   ```
+   /plugin update ask-jev@ask-jev
+   ```
 
 The key file was renamed `jev-ask.key` → `ask-jev.key`; the old name is still
 read as a fallback, so there's nothing to migrate. Restart Claude Code after

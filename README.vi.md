@@ -56,10 +56,17 @@ thường. Không có gì bị ảnh hưởng.
 
 ## Nâng cấp
 
-```
-/plugin marketplace update ask-jev
-/plugin update ask-jev@ask-jev
-```
+1. Làm mới marketplace:
+
+   ```
+   /plugin marketplace update ask-jev
+   ```
+
+2. Cập nhật plugin:
+
+   ```
+   /plugin update ask-jev@ask-jev
+   ```
 
 File khoá được đổi tên `jev-ask.key` → `ask-jev.key`; tên cũ vẫn được đọc như
 phương án dự phòng, nên không cần chuyển gì cả. Khởi động lại Claude Code sau
