@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/yanmad27/ask-jev/compare/v0.5.0...v0.6.0) (2026-09-22)
+
+
+### Features
+
+* **analytics:** per-gate answers — label, confidence, reason ([#10](https://github.com/yanmad27/ask-jev/issues/10)) ([cc21187](https://github.com/yanmad27/ask-jev/commit/cc211874ab07c997bebc683cd59fcc246ed7d5c7))
+
 ## [0.5.0](https://github.com/yanmad27/ask-jev/compare/v0.4.0...v0.5.0) (2026-09-22)
 
 
