@@ -3,7 +3,7 @@ import type { PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { useRpc } from "@getpaseo/plugin/client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FlatList, Pressable, Text, View } from "react-native";
-import { jevStatsRpc, SINCE_OPTIONS, type JevStats, type SinceOption } from "../shared/contracts";
+import { GATES, jevStatsRpc, SINCE_OPTIONS, type JevStats, type SinceOption } from "../shared/contracts";
 
 const POLL_MS = 2000;
 
@@ -11,12 +11,14 @@ export function AskJevPanel({ theme, layout }: PluginWorkspacePanelProps) {
   const fetchStats = useRpc(jevStatsRpc);
   const [since, setSince] = useState<SinceOption>("all");
   const [outcome, setOutcome] = useState("all");
+  const [gate, setGate] = useState("all");
+  const [expanded, setExpanded] = useState<number | null>(null);
   const [stats, setStats] = useState<JevStats | null>(null);
   const styles = useMemo(() => makeStyles(theme, layout.compact), [theme, layout.compact]);
 
   const load = useCallback(() => {
-    fetchStats({ since, outcome }).then(setStats).catch(() => {});
-  }, [fetchStats, since, outcome]);
+    fetchStats({ since, outcome, gate }).then(setStats).catch(() => {});
+  }, [fetchStats, since, outcome, gate]);
 
   useEffect(() => {
     load();
@@ -46,14 +48,28 @@ export function AskJevPanel({ theme, layout }: PluginWorkspacePanelProps) {
     <View style={styles.screen}>
       <View style={styles.tiles}>
         <Tile styles={styles} label="Calls" value={String(stats.calls.total)} />
-        <Tile styles={styles} label="Answered" value={`${stats.decisions.answered_pct.toFixed(0)}%`} />
+        <Tile styles={styles} label="Jev decided" value={`${stats.decisions.positive_pct.toFixed(0)}%`} />
         <Tile styles={styles} label="Fell back to user" value={`${stats.decisions.fallback_pct.toFixed(0)}%`} />
+        <Tile styles={styles} label="User overrides" value={String(stats.user_overrides)} />
         <Tile styles={styles} label="Avg / p95 latency" value={`${stats.calls.avg_latency_ms}ms / ${stats.calls.p95_latency_ms}ms`} />
       </View>
 
       <View style={styles.row}>
         {SINCE_OPTIONS.map((opt) => (
           <Chip key={opt} styles={styles} active={since === opt} label={opt === "all" ? "All time" : opt} onPress={() => setSince(opt)} />
+        ))}
+      </View>
+
+      <View style={styles.row}>
+        <Chip styles={styles} active={gate === "all"} label="All gates" onPress={() => setGate("all")} />
+        {GATES.map((g) => (
+          <Chip
+            key={g}
+            styles={styles}
+            active={gate === g}
+            label={`${g} (${stats.decisions.by_gate[g]?.total ?? 0})`}
+            onPress={() => setGate(g)}
+          />
         ))}
       </View>
 
@@ -72,26 +88,35 @@ export function AskJevPanel({ theme, layout }: PluginWorkspacePanelProps) {
 
       <View style={styles.tableHeader}>
         <Text style={[styles.cell, styles.colTime]}>Time</Text>
+        <Text style={[styles.cell, styles.colGate]}>Gate</Text>
         <Text style={[styles.cell, styles.colOutcome]}>Outcome</Text>
-        <Text style={[styles.cell, styles.colQuestion]}>Question</Text>
-        <Text style={[styles.cell, styles.colLabel]}>Label</Text>
+        <Text style={[styles.cell, styles.colQuestion]}>Question/Subject</Text>
+        <Text style={[styles.cell, styles.colAnswer]}>Answer</Text>
+        <Text style={[styles.cell, styles.colReason]}>Reason</Text>
       </View>
       <FlatList
         data={stats.recent}
         keyExtractor={(item, i) => `${item.ts}-${i}`}
         style={styles.table}
-        renderItem={({ item }) => (
-          <View style={styles.tableRow}>
-            <Text style={[styles.cell, styles.colTime, styles.muted]}>{formatTime(item.ts)}</Text>
-            <Text style={[styles.cell, styles.colOutcome, { color: outcomeColor(theme, item.outcome) }]}>{item.outcome}</Text>
-            <Text style={[styles.cell, styles.colQuestion]} numberOfLines={1}>
-              {item.question}
-            </Text>
-            <Text style={[styles.cell, styles.colLabel]} numberOfLines={1}>
-              {item.label ? `${item.label}${item.confidence != null ? ` (${item.confidence.toFixed(2)})` : ""}` : "—"}
-            </Text>
-          </View>
-        )}
+        renderItem={({ item, index }) => {
+          const isExpanded = expanded === index;
+          return (
+            <Pressable style={styles.tableRow} onPress={() => setExpanded(isExpanded ? null : index)}>
+              <Text style={[styles.cell, styles.colTime, styles.muted]}>{formatTime(item.ts)}</Text>
+              <Text style={[styles.cell, styles.colGate]}>{item.gate ?? "—"}</Text>
+              <Text style={[styles.cell, styles.colOutcome, { color: outcomeColor(theme, item.gate, item.outcome) }]}>{item.outcome}</Text>
+              <Text style={[styles.cell, styles.colQuestion]} numberOfLines={isExpanded ? undefined : 1}>
+                {item.question}
+              </Text>
+              <Text style={[styles.cell, styles.colAnswer]} numberOfLines={1}>
+                {item.label ? `${item.label}${item.confidence != null ? ` ${item.confidence.toFixed(2)}` : ""}` : "—"}
+              </Text>
+              <Text style={[styles.cell, styles.colReason, styles.muted]} numberOfLines={isExpanded ? undefined : 1}>
+                {item.reason ?? "—"}
+              </Text>
+            </Pressable>
+          );
+        }}
         ListEmptyComponent={<Text style={styles.muted}>No decisions in range.</Text>}
       />
     </View>
@@ -122,9 +147,12 @@ function formatTime(ts: string): string {
   return Number.isNaN(d.getTime()) ? ts : d.toLocaleString();
 }
 
-function outcomeColor(theme: PluginTheme, outcome: string): string {
-  if (outcome === "answered") return theme.colors.statusSuccess;
-  if (outcome === "error" || outcome === "no_key") return theme.colors.statusDanger;
+// Mirrors lib/stats.mjs's POSITIVE map — kept small and local since it's presentational only.
+const POSITIVE: Record<string, string[]> = { ask: ["answered"], permission: ["allow"], stop: ["ok"], bash: ["success"], prompt: ["clear"] };
+
+function outcomeColor(theme: PluginTheme, gate: string | undefined, outcome: string): string {
+  if (gate && (POSITIVE[gate] ?? []).includes(outcome)) return theme.colors.statusSuccess;
+  if (outcome === "error" || outcome === "no_key" || outcome === "block") return theme.colors.statusDanger;
   return theme.colors.statusWarning;
 }
 
@@ -170,10 +198,12 @@ function makeStyles(theme: PluginTheme, compact: boolean) {
       paddingVertical: 6,
     },
     cell: { fontSize: 12, color: theme.colors.foreground, paddingHorizontal: 4 },
-    colTime: { width: compact ? 100 : 150 },
-    colOutcome: { width: 110 },
-    colQuestion: { flex: 1 },
-    colLabel: { width: compact ? 110 : 160 },
+    colTime: { width: compact ? 90 : 150 },
+    colGate: { width: 80 },
+    colOutcome: { width: 100 },
+    colQuestion: { flex: 2 },
+    colAnswer: { width: compact ? 100 : 140 },
+    colReason: { flex: compact ? 1 : 2 },
     muted: { color: theme.colors.foregroundMuted, fontSize: 12 },
   };
 }

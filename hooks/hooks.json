@@ -23,7 +23,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ask-jev.mjs\"",
-            "timeout": 15,
+            "timeout": 10,
             "statusMessage": "Asking Jev before asking you..."
           }
         ]
@@ -34,7 +34,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/gates/permission.mjs\"",
-            "timeout": 8,
+            "timeout": 6,
             "statusMessage": "Asking Jev if this needs your OK..."
           }
         ]
@@ -47,7 +47,17 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/gates/bash.mjs\"",
-            "timeout": 8
+            "timeout": 6
+          }
+        ]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ask-jev-answer.mjs\"",
+            "timeout": 5
           }
         ]
       }
@@ -58,7 +68,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/gates/stop.mjs\"",
-            "timeout": 8
+            "timeout": 16
           }
         ]
       }
@@ -69,7 +79,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/gates/prompt.mjs\"",
-            "timeout": 8
+            "timeout": 6
           }
         ]
       }

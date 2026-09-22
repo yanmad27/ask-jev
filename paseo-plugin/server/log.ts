@@ -8,18 +8,33 @@ import { jevStatsRpc } from "../shared/contracts";
 
 const RECENT_LIMIT = 200;
 
+interface GateSummary {
+  total: number;
+  positive: number;
+  by_outcome: Record<string, number>;
+}
+
 interface StatsSummary {
   calls: { total: number; ok: number; error: number; avg_latency_ms: number; p95_latency_ms: number };
-  decisions: { total: number; by_outcome: Record<string, number> };
+  decisions: {
+    total: number;
+    by_outcome: Record<string, number>;
+    by_gate: Record<string, GateSummary>;
+    positive_pct: number;
+    fallback_pct: number;
+  };
+  user_overrides: number;
 }
 
 interface LogEvent {
   ts: string;
   kind: string;
+  gate?: string;
   outcome?: string;
   question?: string;
   label?: string;
   confidence?: number;
+  reason?: string;
 }
 
 let cache: { path: string; mtimeMs: number; size: number; events: LogEvent[] } | null = null;
@@ -50,23 +65,23 @@ function emptyStats(path: string): JevStats {
     logPath: path,
     hasLog: false,
     calls: { total: 0, ok: 0, error: 0, avg_latency_ms: 0, p95_latency_ms: 0 },
-    decisions: { total: 0, by_outcome: {}, answered_pct: 0, fallback_pct: 0 },
+    decisions: { total: 0, by_outcome: {}, by_gate: {}, positive_pct: 0, fallback_pct: 0 },
+    user_overrides: 0,
     recent: [],
   };
 }
 
-export function getStats({ since, outcome }: RpcInput<typeof jevStatsRpc>): JevStats {
+export function getStats({ since, outcome, gate }: RpcInput<typeof jevStatsRpc>): JevStats {
   const path = logPath();
   const allEvents = loadEvents(path);
   if (!allEvents) return emptyStats(path);
 
   const events = filterSince(allEvents, sinceMsFromSpec(since));
   const summary = computeStats(events) as StatsSummary;
-  const total = summary.decisions.total;
-  const answered = summary.decisions.by_outcome.answered ?? 0;
 
-  // Filter by outcome before capping, so a rare outcome isn't crowded out by the 200-row cap.
+  // Filter by gate/outcome before capping, so a rare one isn't crowded out by the 200-row cap.
   let recent = recentDecisions(events, events.length) as LogEvent[];
+  if (gate !== "all") recent = recent.filter((d) => d.gate === gate);
   if (outcome !== "all") recent = recent.filter((d) => d.outcome === outcome);
   recent = recent.slice(0, RECENT_LIMIT);
 
@@ -74,18 +89,16 @@ export function getStats({ since, outcome }: RpcInput<typeof jevStatsRpc>): JevS
     logPath: path,
     hasLog: true,
     calls: summary.calls,
-    decisions: {
-      total,
-      by_outcome: summary.decisions.by_outcome,
-      answered_pct: total ? (answered / total) * 100 : 0,
-      fallback_pct: total ? ((total - answered) / total) * 100 : 0,
-    },
+    decisions: summary.decisions,
+    user_overrides: summary.user_overrides,
     recent: recent.map((d) => ({
       ts: d.ts,
+      gate: d.gate,
       outcome: d.outcome ?? "",
       question: d.question ?? "",
       label: d.label,
       confidence: d.confidence,
+      reason: d.reason,
     })),
   };
 }

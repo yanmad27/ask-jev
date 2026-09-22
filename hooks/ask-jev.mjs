@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { apiKey, askJev, logEvent } from "../lib/jev.mjs";
 import { buildState, hasContext } from "../lib/context.mjs";
+import { truncate, autonomy, DESTRUCTIVE, FOCUS } from "../lib/gate.mjs";
 
 /**
  * hooks.json và self-register.mjs (xem file đó) có thể cùng đăng ký hook này, nên
@@ -40,8 +41,9 @@ function isDuplicate(input) {
 
 const THRESHOLD = Number(process.env.JEV_ASK_THRESHOLD ?? 0.8);
 
+let currentSessionId;
 function logDecision(question, options, outcome, extra = {}) {
-  logEvent({ kind: "decision", source: "hook", question, options: options.map((o) => o.label), outcome, ...extra });
+  logEvent({ kind: "decision", source: "hook", gate: "ask", session_id: currentSessionId, question, options: options.map((o) => o.label), outcome, ...extra });
 }
 
 /**
@@ -64,7 +66,7 @@ const PERSONAL_QUESTION = {
   },
 };
 
-async function decide(key, { question, options, context }) {
+async function decide(key, { question, options, context, sizes }) {
   if (options.length < 2) {
     logDecision(question, options, "error", { reason: "single option" });
     return null;
@@ -93,18 +95,25 @@ async function decide(key, { question, options, context }) {
       pick: {
         type: "choice",
         instructions: {
-          question: "Given `conversationContext`, which option answers `pendingQuestion`?",
+          question: "Given `conversationContext`, which option answers `pendingQuestion`? Acting on the user's behalf, which would they pick?",
           focus:
             "Each option's `what` in `answerOptions` is its definition, `not_for` is what it must not overlap with. Choose what the user themselves would choose.",
         },
         criteria,
       },
       personal: PERSONAL_QUESTION,
+      destructive: { type: "boolean", instructions: { question: "Is `pendingQuestion` about a destructive/irreversible action?", focus: FOCUS }, criteria: DESTRUCTIVE },
     },
     "hook",
+    8000,
+    sizes,
   );
 
-  if (answers.personal.probability > 0.5) {
+  if ((answers.destructive?.probability ?? 1) >= 0.6) {
+    logDecision(question, options, "destructive");
+    return null;
+  }
+  if (autonomy() !== "full" && answers.personal.probability > 0.5) {
     logDecision(question, options, "personal");
     return null;
   }
@@ -114,8 +123,10 @@ async function decide(key, { question, options, context }) {
     return null;
   }
 
-  const label = options[Number.parseInt(answers.pick.choice.slice(1), 10)]?.label;
-  logDecision(question, options, "answered", { label, confidence });
+  const picked = options[Number.parseInt(answers.pick.choice.slice(1), 10)];
+  const label = picked?.label;
+  const reason = truncate(picked?.description ?? "", 160);
+  logDecision(question, options, "answered", { label, confidence, reason });
   return { label, confidence };
 }
 
@@ -125,18 +136,21 @@ async function decide(key, { question, options, context }) {
  * khoát (>= THRESHOLD hoặc <= 1-THRESHOLD); còn một option lửng lơ ở giữa thì cả
  * câu hỏi coi như chưa giải quyết được, để người quyết.
  */
-async function decideMulti(key, { question, options, context }) {
+async function decideMulti(key, { question, options, context, sizes }) {
   if (options.length < 2) {
     logDecision(question, options, "error", { reason: "single option" });
     return null;
   }
 
-  const questions = { personal: PERSONAL_QUESTION };
+  const questions = {
+    personal: PERSONAL_QUESTION,
+    destructive: { type: "boolean", instructions: { question: "Is `pendingQuestion` about a destructive/irreversible action?", focus: FOCUS }, criteria: DESTRUCTIVE },
+  };
   options.forEach((o, i) => {
     questions[`o${i}`] = {
       type: "boolean",
       instructions: {
-        question: `${question} — does this option apply?`,
+        question: `${question} — does this option apply? Acting on the user's behalf, would they pick it?`,
         focus: `Judge only whether "${o.label}" applies, independent of the other options.`,
       },
       criteria: {
@@ -146,14 +160,19 @@ async function decideMulti(key, { question, options, context }) {
     };
   });
 
-  const answers = await askJev(key, { conversationContext: context, pendingQuestion: question }, questions, "hook");
+  const answers = await askJev(key, { conversationContext: context, pendingQuestion: question }, questions, "hook", 8000, sizes);
 
-  if (answers.personal.probability > 0.5) {
+  if ((answers.destructive?.probability ?? 1) >= 0.6) {
+    logDecision(question, options, "destructive");
+    return null;
+  }
+  if (autonomy() !== "full" && answers.personal.probability > 0.5) {
     logDecision(question, options, "personal");
     return null;
   }
 
   const selected = [];
+  const reasons = [];
   let confidence = 1;
   for (let i = 0; i < options.length; i++) {
     const p = answers[`o${i}`]?.probability;
@@ -163,6 +182,7 @@ async function decideMulti(key, { question, options, context }) {
     }
     if (p >= THRESHOLD) {
       selected.push(options[i].label);
+      reasons.push(options[i].description);
       confidence = Math.min(confidence, p);
     } else if (p <= 1 - THRESHOLD) {
       confidence = Math.min(confidence, 1 - p);
@@ -173,7 +193,8 @@ async function decideMulti(key, { question, options, context }) {
   }
 
   const label = selected.length > 0 ? selected.join(", ") : "none";
-  logDecision(question, options, "answered", { label, confidence });
+  const reason = truncate(reasons.length > 0 ? reasons.join("; ") : "no option applied", 160);
+  logDecision(question, options, "answered", { label, confidence, reason });
   return { label, confidence };
 }
 
@@ -186,10 +207,11 @@ async function main() {
   }
   if (input.tool_name !== "AskUserQuestion") return;
   if (isDuplicate(input)) return;
+  currentSessionId = input.session_id;
 
   const key = apiKey();
   if (!key) {
-    logEvent({ kind: "decision", source: "hook", outcome: "no_key" });
+    logEvent({ kind: "decision", source: "hook", gate: "ask", session_id: input.session_id, outcome: "no_key" });
     return;
   }
 
@@ -225,16 +247,16 @@ async function main() {
     return;
   }
 
-  const context = buildState({ transcriptPath: input.transcript_path ?? "", cwd: input.cwd });
-  if (!hasContext(context)) {
-    logEvent({ kind: "decision", source: "hook", outcome: "no_context" });
+  const { state, sizes } = buildState({ transcriptPath: input.transcript_path ?? "", cwd: input.cwd, sessionId: input.session_id });
+  if (!hasContext(state)) {
+    logEvent({ kind: "decision", source: "hook", gate: "ask", session_id: input.session_id, outcome: "no_context" });
     return;
   }
 
   const results = await Promise.all(
     questions.map((q) => {
       const fn = q.multiSelect ? decideMulti : decide;
-      return fn(key, { question: q.question, options: q.options ?? [], context }).catch(() => {
+      return fn(key, { question: q.question, options: q.options ?? [], context: state, sizes }).catch(() => {
         logDecision(q.question, q.options ?? [], "error");
         return null;
       });
