@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.0](https://github.com/yanmad27/ask-jev/compare/v1.2.1...v1.3.0) (2026-09-23)
+
+
+### Features
+
+* **paseo:** scope the panel to the workspace's repo, with an All repos toggle ([#35](https://github.com/yanmad27/ask-jev/issues/35)) ([9544c86](https://github.com/yanmad27/ask-jev/commit/9544c86da2a257367cd59167a6ab860b50c1cf9d))
+
+
+### Bug Fixes
+
+* **jev:** retry 5xx with doubling backoff until the budget runs out ([#34](https://github.com/yanmad27/ask-jev/issues/34)) ([79a14e6](https://github.com/yanmad27/ask-jev/commit/79a14e613e8ba2b98b2227bb41b9e5d1adb4ce1d))
+
 ## [1.2.1](https://github.com/yanmad27/ask-jev/compare/v1.2.0...v1.2.1) (2026-09-23)
 
 
