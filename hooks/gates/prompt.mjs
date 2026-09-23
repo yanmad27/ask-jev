@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /** UserPromptSubmit: nhắc luật hỏi Jev mỗi lượt + xử lý prompt mập mờ (full: tự quyết, safe: cảnh báo). */
 import { fileURLToPath } from "node:url";
-import { apiKey, askJev, logEvent } from "../../lib/jev.mjs";
+import { apiKey, askJev, logEvent, NOT_CHAT, REQUEST_SHAPE, CRITERIA_SHAPE } from "../../lib/jev.mjs";
 import { buildState, hasContext } from "../../lib/context.mjs";
 import { enabled, readStdinJson, FOCUS, truncate, autonomy } from "../../lib/gate.mjs";
 import { env } from "../../lib/env.mjs";
 
 const jevPath = fileURLToPath(new URL("../../bin/jev.mjs", import.meta.url));
-const REMINDER = `Reminder: before classifying / choosing among options / yes-no on evidence, ask Jev: echo '<json>' | node "${jevPath}" (skill ask-jev). Personal taste or irreversible actions → ask the user. When the user defers a choice to you/Jev, ask Jev which option the user would pick — no "undetermined" option. Never write your own description of the user into state — only raw evidence. In full autonomy: do not ask the user; state assumptions and proceed unless destructive.`;
+const REMINDER = `Reminder: before classifying / choosing among options / yes-no on evidence, ask Jev: echo '<json>' | node "${jevPath}" with <json> = ${REQUEST_SHAPE}; ${CRITERIA_SHAPE}. ${NOT_CHAT} (skill ask-jev). Personal taste or irreversible actions → ask the user. When the user defers a choice to you/Jev, ask Jev which option the user would pick — no "undetermined" option. Never write your own description of the user into state — only raw evidence. In full autonomy: do not ask the user; state assumptions and proceed unless destructive.`;
 
 const AMBIGUOUS = {
   true: "Multiple materially different readings that would change the work",

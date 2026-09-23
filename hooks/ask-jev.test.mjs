@@ -7,6 +7,7 @@ import { writeFileSync, readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseEvents, filterSince, sinceMsFromSpec, recentDecisions, computeStats } from "../lib/stats.mjs";
+import { requestError } from "../lib/jev.mjs";
 
 const execFileAsync = promisify(execFile);
 const transcript = join(mkdtempSync(join(tmpdir(), "askjev-")), "t.jsonl");
@@ -228,4 +229,34 @@ test("bidirectional (safe mode): personal forward/mirror contradiction still def
   assert.equal(out, ""); // deferred → hook silent, user decides
   const d = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "decision").at(-1);
   assert.equal(d.outcome, "personal");
+});
+
+test("cli: wrong input shape fails with the expected shape, not a TypeError", async () => {
+  const run = execFileAsync("node", ["bin/jev.mjs"], { env: { ...process.env, AI_GATEWAY_API_KEY: "x" } });
+  run.child.stdin.end(JSON.stringify({ task: "t", context: "c", question: "q" }));
+  await assert.rejects(run, (err) => /input must be \{"state"/.test(err.stderr) && /got keys: task, context, question/.test(err.stderr));
+});
+
+test("requestError: rejects shapes agents invent, accepts documented ones", () => {
+  const q = (over) => ({ state: { x: 1 }, questions: { a: { type: "boolean", instructions: { question: "?" }, criteria: { true: "t", false: "f" }, ...over } } });
+  const bad = [
+    [null, /input must be/],
+    [[], /input must be/],
+    [{ state: "s", questions: {} }, /input must be/],
+    [{ questions: q().questions }, /input must be/],
+    [{ state: "s", question: "free text?" }, /got keys: state, question/],
+    [q({ type: "classify" }), /questions\.a\.type must be one of/],
+    [q({ instructions: undefined }), /questions\.a\.instructions is required/],
+    [q({ criteria: undefined }), /questions\.a\.criteria is required/],
+    [q({ criteria: ["A", "B"] }), /questions\.a\.criteria is required/],
+    [q({ criteria: { yes: "y", no: "n" } }), /needs both "true" and "false"/],
+    [q({ type: "choice", criteria: { only: { what: "x" } } }), /needs 2\+ options/],
+  ];
+  for (const [input, re] of bad) assert.match(requestError(input) ?? "", re, JSON.stringify(input));
+
+  assert.equal(requestError(q()), null);
+  assert.equal(requestError(q({ type: "choice", criteria: { a: { what: "x" }, b: "plain string ok" } })), null);
+  const skill = readFileSync("skills/ask-jev/SKILL.md", "utf8").match(/```json\n([\s\S]*?)```/)[1];
+  assert.equal(requestError(JSON.parse(skill)), null, "SKILL.md example must stay valid");
+  assert.equal(requestError(JSON.parse(readFileSync("evals/fixtures/classify-ticket.json", "utf8"))), null);
 });

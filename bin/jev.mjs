@@ -4,7 +4,7 @@
  * in `answers` thô ra stdout. Dùng bởi skill ask-jev, hoặc trực tiếp.
  */
 import { readFileSync } from "node:fs";
-import { apiKey, askJev, logFilePath } from "../lib/jev.mjs";
+import { apiKey, askJev, logFilePath, requestError, NOT_CHAT } from "../lib/jev.mjs";
 import { computeStats, filterSince, parseEvents, recentDecisions, sinceMsFromSpec } from "../lib/stats.mjs";
 
 function fail(message) {
@@ -73,6 +73,9 @@ async function main() {
   } catch {
     return fail("input is not valid JSON");
   }
+
+  const invalid = requestError(input);
+  if (invalid) return fail(`${invalid}. ${NOT_CHAT}`);
 
   const key = apiKey();
   if (!key) return fail("no API key (set AI_GATEWAY_API_KEY or ~/.claude/ask-jev.key)");
