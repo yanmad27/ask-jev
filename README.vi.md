@@ -42,121 +42,124 @@ Câu nào thật sự thuộc về bạn thì vẫn tới tay bạn, y như cũ.
    /plugin install ask-jev@ask-jev
    ```
 
-3. Đặt khoá Vercel AI Gateway (Jev nằm trong danh mục model của Vercel):
+3. Cấp cho nó một Vercel AI Gateway key (Jev nằm trong danh mục model của Vercel):
 
    ```bash
    echo 'vck_...' > ~/.claude/ask-jev.key && chmod 600 ~/.claude/ask-jev.key
    ```
 
-   Đã có sẵn khoá gateway? Dùng biến môi trường `AI_GATEWAY_API_KEY` thay thế
-   — không cần tạo file.
+   Đã có sẵn gateway key? Đặt biến môi trường `AI_GATEWAY_API_KEY` thay vào —
+   không cần tạo file.
 
-Vậy là xong. **Không đặt khoá →** plugin nằm im, Claude Code hỏi bạn như bình
-thường. Không có gì bị ảnh hưởng.
+Vậy là xong. **Chưa đặt key →** plugin lặng lẽ không làm gì và Claude Code
+vẫn hỏi bạn y hệt như trước giờ. Không có gì để hỏng cả.
 
-## Nâng cấp
+## Bạn sẽ thấy gì
 
-### Claude Code
+Khi Jev trả lời một câu hỏi thay bạn, nó hiện lên như một dòng duy nhất
+trong session — `Jev answered: ...` — rồi Claude tiếp tục làm như thể chính
+bạn vừa gõ câu trả lời đó. Mọi thứ khác (câu hỏi thuộc về bạn, hoặc Jev
+không chắc chắn) vẫn tới tay bạn như bình thường.
 
-1. Làm mới marketplace:
+## Cách hoạt động
 
-   ```
-   /plugin marketplace update ask-jev
-   ```
+Bốn lớp xếp chồng lên nhau:
 
-2. Cập nhật plugin:
+1. **[Tự trả lời `AskUserQuestion`](#1-tự-trả-lời-askuserquestion)** — tính
+   năng cốt lõi ở trên.
+2. **[Hỏi Jev trước khi phán đoán](#2-hỏi-jev-trước-khi-phán-đoán)** —
+   Claude được nhắc hỏi Jev cho *mọi* phán đoán, không chỉ
+   `AskUserQuestion`, qua một skill và CLI đi kèm.
+3. **[Các gate tự động](#3-các-gate-tự-động)** — bốn hook chủ động hỏi Jev
+   đúng những lúc một reviewer con người sẽ lên tiếng: lệnh này có an toàn
+   không, assistant có dừng quá sớm không, lệnh có chạy thành công không,
+   prompt có mơ hồ không.
+4. **[Autonomy](#4-autonomy)** — ask-jev tự hành động thay vì hỏi bạn tới
+   mức nào, với một lằn ranh không bao giờ tắt: bất cứ gì có tính phá huỷ
+   luôn được đưa về cho bạn quyết.
 
-   ```
-   /plugin update ask-jev@ask-jev
-   ```
+### 1. Tự trả lời `AskUserQuestion`
 
-File khoá được đổi tên `jev-ask.key` → `ask-jev.key`; tên cũ vẫn được đọc như
-phương án dự phòng, nên không cần chuyển gì cả. Khởi động lại Claude Code sau
-khi nâng cấp — hook chỉ nạp lại khi vào phiên mới.
+Trước khi Claude Code hiện câu hỏi cho bạn, ask-jev gửi nó cho Jev để phán
+đoán hai việc:
 
-### Plugin Paseo
+1. **Đây có phải là việc của bạn để quyết không?** Sở thích, ưu tiên riêng
+   tư, hay bất cứ điều gì không thể hoàn tác (xoá, gửi, publish, tiêu tiền)
+   — Jev từ chối đụng vào, dù đáp án "đúng" có vẻ hiển nhiên tới đâu.
+2. **Nếu không, đáp án nào đúng** — dựa trên mọi thứ đã nói trong cuộc
+   hội thoại tới giờ?
 
-`paseo plugin update ask-jev`, rồi Cmd+R / khởi động lại Paseo.
+Chỉ khi Jev vừa tự tin vừa chắc chắn câu hỏi không mang tính cá nhân, Claude
+mới nhận được đáp án một cách âm thầm và tiếp tục. Ngược lại, câu hỏi vẫn
+tới tay bạn y như khi chưa cài ask-jev.
 
-## 1. Tự trả lời `AskUserQuestion`
+<details>
+<summary>Option cần định nghĩa thật sự, multiSelect, và khi nào nó im lặng</summary>
 
-Trước khi Claude Code hiện câu hỏi cho bạn, ask-jev gửi câu đó cho Jev để
-phán hai việc:
+**Option cần định nghĩa thật sự.** Để Jev phán đoán được, mỗi option cần một
+mô tả **định nghĩa** nó thật sự — chứ không chỉ là một cái nhãn. Lấy ví dụ
+"Đây có phải hamburger không?" với option chỉ ghi "Có": chẳng có gì để đối
+chiếu cả. "Có" cần một mô tả kiểu *"Một loại sandwich nóng: một miếng thịt
+bằm nấu chín kẹp trong bánh mì tròn cắt đôi"* — thứ mà bạn có thể đem bằng
+chứng ra đối chiếu và kiểm chứng được.
 
-1. **Đây có phải chuyện của bạn không?** Sở thích, ưu tiên riêng, hay bất kỳ
-   việc gì không hoàn tác được (xoá, gửi, publish, tốn tiền) — Jev không đụng
-   vào, dù đáp án "đúng" có vẻ hiển nhiên đến đâu.
-2. **Nếu không phải, phương án nào đúng** — dựa trên mọi thứ đã nói trong
-   cuộc hội thoại?
+Nếu bất kỳ option nào trong câu hỏi thiếu mô tả, ask-jev không gọi Jev luôn
+— nó trả câu hỏi thẳng về cho Claude kèm hướng dẫn hỏi lại với định nghĩa
+đầy đủ. Không có gì tới tay bạn trong lượt đó; Claude chỉ đơn giản thử lại.
 
-Chỉ khi Jev vừa chắc chắn vừa xác định câu hỏi không phải chuyện riêng, Claude
-mới nhận đáp án âm thầm rồi đi tiếp. Còn lại, câu hỏi tới tay bạn y hệt như
-khi chưa cài ask-jev.
+Bên dưới, mỗi option được gửi dưới dạng `{what, not_for}` — `not_for` nêu
+tên những option anh em mà nó không được trùng lặp, để các định nghĩa loại
+trừ lẫn nhau thay vì chỉ nằm cạnh nhau.
 
-### Lựa chọn cần định nghĩa thật sự
+**Nhiều câu hỏi, và multiSelect.** Nhiều câu hỏi trong cùng một lời gọi
+`AskUserQuestion` được trả lời độc lập với nhau. Câu nào Jev tự tin thì được
+dùng; số còn lại được trả về cho bạn — lý do Claude nhận lại nêu tên các đáp
+án đã giải quyết và nói chỉ hỏi lại phần còn thiếu, để một đáp án tự tin
+không bao giờ bị bỏ chỉ vì một câu hỏi anh em còn mơ hồ.
 
-Để Jev phán đoán được, mỗi lựa chọn cần một description **định nghĩa** nó —
-không chỉ là cái nhãn. Lấy ví dụ "Đây có phải burger không?" với lựa chọn chỉ
-ghi "Có": chẳng có gì để đối chiếu cả. "Có" cần một description kiểu *"Một
-món ăn nóng: miếng thịt bằm nướng kẹp trong bánh mì tròn cắt đôi"* — thứ bạn
-có thể cầm bằng chứng lên mà kiểm chứng được.
+Câu hỏi `multiSelect` cũng đi qua Jev: mỗi option trở thành một câu hỏi
+yes/no riêng ("option này có áp dụng không?") thay vì chọn một. Một option
+được tính là chọn khi xác suất vượt `ASK_JEV_ASK_THRESHOLD`, bị loại khi rơi
+dưới `1 - ASK_JEV_ASK_THRESHOLD`, và cả câu hỏi vẫn chưa giải quyết nếu có
+option nào rơi vào khoảng giữa. Đáp án đã giải quyết là danh sách nhãn được
+chọn, nối bằng dấu phẩy — có thể là "none".
 
-Thiếu description ở bất kỳ lựa chọn nào trong câu hỏi, ask-jev không gọi Jev
-luôn — nó trả câu hỏi ngược lại cho Claude kèm hướng dẫn hỏi lại với định
-nghĩa đầy đủ. Vòng đó không có gì tới tay bạn; Claude chỉ việc thử lại.
-
-Bên dưới, mỗi lựa chọn được gửi dạng `{what, not_for}` — `not_for` nêu tên
-các lựa chọn anh em mà nó không được trùng, để các định nghĩa loại trừ nhau
-chứ không chỉ đứng cạnh nhau.
-
-### Nhiều câu hỏi, và multiSelect
-
-Nhiều câu hỏi trong cùng một lệnh `AskUserQuestion` được trả lời độc lập với
-nhau. Câu nào Jev chắc thì dùng luôn; câu nào không thì trả lại cho bạn — lý
-do đưa ngược cho Claude nêu tên các câu đã trả lời và nói chỉ hỏi lại những
-câu còn thiếu, để một câu trả lời chắc chắn không bị bỏ đi chỉ vì câu bên
-cạnh còn mập mờ.
-
-Câu hỏi `multiSelect` cũng qua Jev: mỗi lựa chọn thành một câu hỏi có/không
-riêng ("lựa chọn này có áp dụng không?") thay vì một câu chọn duy nhất. Một
-lựa chọn được chọn khi xác suất vượt `ASK_JEV_ASK_THRESHOLD`, bị loại khi xuống
-dưới `1 - ASK_JEV_ASK_THRESHOLD`, còn cả câu hỏi vẫn chưa giải quyết nếu có lựa
-chọn nằm lửng lơ ở giữa. Đáp án đã giải quyết là danh sách nhãn được chọn nối
-bằng dấu phẩy — có thể là "none".
-
-### Khi nào nó im lặng
+**Khi nào nó im lặng.**
 
 | Điều kiện | Vì sao |
 |---|---|
-| câu hỏi là chuyện riêng (`personal > 0.5`) | quyền của bạn, không phải của model |
-| Jev không đủ chắc (`< ASK_JEV_ASK_THRESHOLD`) | đoán mò thì thà hỏi còn hơn |
-| có lựa chọn thiếu description | nhãn trần không phải thứ Jev phán đoán được — trả về cho Claude, không đưa cho Jev |
-| transcript không có ngữ cảnh dùng được | không có gì cho Jev chấm |
-| không có khoá, Jev lỗi, hoặc quá 8 giây | một helper hỏng không bao giờ được phép là lý do bạn không trả lời được |
+| câu hỏi mang tính cá nhân (`personal > 0.5`) | đó là việc của bạn, không phải của model |
+| Jev không đủ tự tin (`< ASK_JEV_ASK_THRESHOLD`) | đoán bừa còn tệ hơn hỏi |
+| một option thiếu mô tả | nhãn trơn thì Jev không phán đoán được — trả về cho Claude, không chuyển cho Jev |
+| không có ngữ cảnh dùng được trong transcript | không có gì để Jev đối chiếu |
+| chưa đặt key, Jev lỗi, hoặc mất hơn 8s | một helper hỏng không bao giờ được là lý do bạn không trả lời được |
 
-## 2. Hỏi Jev trước khi tự quyết
+</details>
 
-Một hook `SessionStart` nhắc luôn quy tắc hỏi Jev trước mọi quyết định —
-phân loại, chọn giữa các phương án cố định, có/không dựa trên bằng chứng,
-xếp hạng — chứ không chỉ khi `AskUserQuestion` được gọi. Hai hook chạy ở mỗi
-đầu phiên: `self-register.mjs`, vá bug của Claude Code khiến `PreToolUse`
-hook khai trong plugin không chạy (xem Ghi chú triển khai), và
-`session-start.mjs`, tiêm luật vào. Cả hai đều im lặng nếu chưa có khoá API.
+### 2. Hỏi Jev trước khi phán đoán
 
-Nhắc một lần đầu phiên rất dễ bị quên sau vài chục lượt, nên gate `prompt`
-(bên dưới) tiêm lại đúng một dòng luật đó ở **mỗi** lượt qua hook
-`UserPromptSubmit`. Đặt `ASK_JEV_REMIND=0` để tắt (ví dụ thấy lặp lại phiền); nó
-cũng tự im lặng nếu chưa có khoá API.
+Một hook `SessionStart` chèn một quy tắc ngắn nhắc Claude hỏi Jev trước bất
+kỳ phán đoán nào — phân loại, chọn giữa các lựa chọn cố định, yes/no dựa
+trên bằng chứng, xếp hạng — không chỉ khi `AskUserQuestion` được gọi. Hai
+hook chạy ở mỗi lần bắt đầu session: `self-register.mjs`, dùng để lách một
+lỗi của Claude Code khiến hook `PreToolUse` của plugin không chạy được (xem
+[Ghi chú triển khai](#ghi-chú-triển-khai)), và `session-start.mjs`, chèn
+quy tắc đó. Cả hai đều im lặng nếu chưa cấu hình API key.
 
-Không chỉ tự trả lời `AskUserQuestion`, Claude còn có thể hỏi Jev cho *bất kỳ*
-quyết định nào — phân loại, chọn phương án, có/không, chấm điểm — qua skill và
-CLI đi kèm:
+Vì một lời nhắc lúc đầu session dễ bị quên sau chục lượt trò chuyện, gate
+`prompt` (bên dưới) chèn lại đúng quy tắc một dòng đó ở **mỗi** lượt qua
+hook `UserPromptSubmit`. Đặt `ASK_JEV_REMIND=0` để tắt (ví dụ nếu bạn thấy
+lặp lại quá); nó vốn đã im lặng khi chưa cấu hình API key.
+
+Ngoài việc tự trả lời `AskUserQuestion`, Claude còn có thể hỏi Jev cho *bất
+kỳ* phán đoán nào — phân loại, chọn giữa các lựa chọn, trả lời yes/no, chấm
+điểm theo thang — qua skill và CLI đi kèm:
 
 ```
 echo '{"state": ..., "questions": ...}' | node ~/.claude/plugins/marketplaces/ask-jev/bin/jev.mjs
 ```
 
-Để tiện lợi, thêm vào shell profile của bạn:
+Để tiện dùng, thêm vào shell profile của bạn:
 ```
 alias jev='node ~/.claude/plugins/marketplaces/ask-jev/bin/jev.mjs'
 ```
@@ -186,169 +189,210 @@ Response:
 { "isHamburger": { "probability": 0.97, "confidence": 0.95 } }
 ```
 
-Skill (`skills/ask-jev/SKILL.md`) giải thích thế nào là một request tốt —
-bằng chứng dán nguyên vào `state`, mỗi câu hỏi một quyết định, tiêu chí quan
-sát được và loại trừ lẫn nhau — kèm ví dụ cụ thể.
+Skill (`skills/ask-jev/SKILL.md`) giải thích một request tốt trông ra sao —
+bằng chứng dán nguyên văn vào `state`, một phán đoán cho mỗi câu hỏi, tiêu
+chí quan sát được và loại trừ lẫn nhau — kèm ví dụ minh hoạ.
 
-## 3. Cổng tự động
+### 3. Các gate tự động
 
-Ngoài tự trả lời `AskUserQuestion`, bốn hook chủ động hỏi Jev đúng lúc một
-người review thật sẽ lên tiếng — Claude không cần tự nhận ra đây là một
-quyết định cần hỏi. Cả bốn bật sẵn, tắt riêng từng cái bằng `ASK_JEV_GATES`
-(danh sách phẩy; `ASK_JEV_GATES=` tắt hết).
+Ngoài việc tự trả lời `AskUserQuestion`, bốn hook chủ động hỏi Jev đúng
+những lúc một reviewer con người sẽ thật sự lên tiếng — không cần Claude
+gọi phán đoán tường minh. Mỗi gate bật mặc định và có thể tắt riêng bằng
+`ASK_JEV_GATES` (danh sách phân tách bởi dấu phẩy; `ASK_JEV_GATES=` tắt cả bốn).
 
-| Gate | Chạy lúc | Jev phán | Kết quả |
+| Gate | Chạy khi | Jev phán đoán | Hiệu ứng |
 |---|---|---|---|
-| `permission` | `PreToolUse` (mọi tool — matcher `*`) | Việc này chạy không cần hỏi có an toàn không? | Allowlist tĩnh cho tool đọc-only (`Read`, `Grep`, `Glob`, `LS`, `WebSearch`, `WebFetch`, MCP dạng `list_`/`get_`/`read_`/`search_`/`inspect_`/`capture_`, …) tự allow ngay, **không gọi mạng**. Còn lại hỏi Jev cả `safe` lẫn `destructive` cùng lúc: `p(destructive) ≥ 0.6` luôn ép hỏi lại; nếu không thì `p(safe) ≥ ASK_JEV_ALLOW_THRESHOLD` và `p(destructive) < 0.3` → tự allow; còn lại hỏi lại (không còn bucket "unsure" im lặng). Ở [tự trị full](#4-tự-trị), bất cứ gì Jev chấm không destructive (`< 0.3`) đều chạy tiếp dù `safe` không đạt ngưỡng; `0.3–0.6` vẫn hỏi lại; `≥ 0.6` luôn hỏi lại |
-| `stop` | `Stop` | Claude dừng khi việc còn dang dở không? | `p ≥ 0.85` → chặn dừng kèm lý do. Ở [tự trị full](#4-tự-trị), còn tự trả lời thay nếu câu cuối hỏi xin phép |
-| `bash` | `PostToolUse` (Bash) | success / error / tests_failed / needs_attention | Không phải `success` với `p ≥ 0.8` → gắn thêm một dòng ngữ cảnh cho Claude |
-| `prompt` | `UserPromptSubmit` | Prompt có mập mờ không? (bỏ qua nếu dưới 12 ký tự hoặc bắt đầu bằng `/`) | Safe: cảnh báo hỏi lại người dùng nếu `p ≥ 0.85`. [Tự trị full](#4-tự-trị): không bao giờ hỏi — chạy theo nghĩa đen hoặc nêu giả định rồi làm luôn |
+| `permission` | `PreToolUse` (mọi tool — matcher `*`) | Chạy cái này mà không hỏi có an toàn không? | Một allowlist chỉ-đọc tĩnh (`Read`, `Grep`, `Glob`, `LS`, `WebSearch`, `WebFetch`, các lời gọi MCP dạng `list_`/`get_`/`read_`/`search_`/`inspect_`/`capture_`, …) tự động cho phép với **zero lời gọi mạng**. Mọi thứ khác hỏi Jev cả `safe` lẫn `destructive` cùng lúc: `p(destructive) ≥ 0.6` luôn buộc phải hỏi; ngược lại `p(safe) ≥ ASK_JEV_ALLOW_THRESHOLD` và `p(destructive) < 0.3` → tự cho phép; còn lại thì hỏi (không có nhóm "không chắc" âm thầm nào). Ở [autonomy full](#4-autonomy), bất cứ gì Jev đánh giá không phá huỷ (`< 0.3`) đều được tiếp tục dù `safe` không đạt ngưỡng; `0.3–0.6` hỏi; `≥ 0.6` luôn hỏi |
+| `stop` | `Stop` | Assistant có dừng lại trong khi việc còn dang dở không? | `p ≥ 0.85` → chặn lại kèm lý do. Ở [autonomy full](#4-autonomy), còn tự giải quyết luôn câu "nên…?" còn treo thay cho người dùng |
+| `bash` | `PostToolUse` (Bash) | success / error / tests_failed / needs_attention | Kết quả khác `success` với `p ≥ 0.8` sẽ thêm một dòng ngữ cảnh cho Claude |
+| `prompt` | `UserPromptSubmit` | Prompt có mơ hồ không? (bỏ qua nếu dưới 12 ký tự hoặc bắt đầu bằng `/`) | Chế độ safe: cảnh báo nên hỏi lại người dùng ở `p ≥ 0.85`. [Autonomy full](#4-autonomy): không bao giờ hỏi — tiến hành theo cách hiểu nghĩa đen hoặc nêu rõ giả định |
 
-Fast path đọc-only và tiêu chí `destructive` nằm chung ở `lib/gate.mjs`,
-dùng chung giữa hook `permission` và `bin/jev-eval.mjs`, nên chấm lại
-(replay) dùng đúng luật y hệt một quyết định thật. `AskUserQuestion` không
-bao giờ đi qua gate này — nó có hook riêng (mục 1).
+Đường tắt chỉ-đọc và tiêu chí `destructive` nằm ở `lib/gate.mjs`, dùng chung
+giữa hook `permission` và `bin/jev-eval.mjs`, để việc replay dùng đúng luật
+mà một quyết định thật sự sẽ dùng. `AskUserQuestion` không đi qua gate này —
+nó có hook riêng (mục 1).
 
-**Thế nào là destructive.** Mất mát hay lộ thông tin không thể hoàn tác —
-không undo, không lấy lại được dữ liệu hay lòng tin:
+<details>
+<summary>Thế nào là "phá huỷ" (và thế nào là không)</summary>
 
-- Xoá hoặc ghi đè file ngoài CẢ workspace lẫn scratch dir (`/tmp`,
-  `$TMPDIR`, `~/.cache`, `~/.paseo/worktrees`, git worktree), hoặc `rm -rf`
-  trên đường dẫn không phải scratch
-- `git push --force`/`--force-with-lease`, viết lại lịch sử chung, hoặc
-  push thẳng vào `main`/`master`/branch được bảo vệ khác
-- Xoá remote branch hoặc tag
-- `npm publish`/`paseo plugin install` từ nguồn không tin cậy, deploy, trả
-  tiền, hoặc gửi email/tin nhắn cho bên thứ ba
-- In ra hoặc làm lộ secret/key, hoặc xoá database
+**Thế nào là phá huỷ.** Mất mát hoặc lộ thông tin không thể hoàn tác — không
+undo được, không lấy lại được dữ liệu hay lòng tin:
+
+- Xoá hoặc ghi đè một file nằm ngoài cả workspace lẫn các thư mục scratch
+  (`/tmp`, `$TMPDIR`, `~/.cache`, `~/.paseo/worktrees`, git worktree), hoặc
+  `rm -rf` trên đường dẫn không phải scratch
+- `git push --force`/`--force-with-lease`, viết lại lịch sử dùng chung, hoặc
+  push thẳng vào `main`/`master`/nhánh được bảo vệ khác
+- Xoá một remote branch hoặc tag
+- `npm publish`/`paseo plugin install` từ nguồn không đáng tin, deploy, trả
+  tiền, hoặc email/nhắn tin cho bên thứ ba
+- In ra hoặc làm lộ một secret hay key, hoặc drop một database
 - Sửa `~/.ssh`, `~/.claude/settings*.json`, hoặc file rc của shell
 
-Có thể hoàn tác nên **không** destructive:
+Có thể hoàn tác, nên **không** phải phá huỷ:
 
-- Ghi trong workspace hoặc scratch dir (`/tmp`, `$TMPDIR`, `~/.cache`,
+- Ghi trong workspace hoặc thư mục scratch (`/tmp`, `$TMPDIR`, `~/.cache`,
   `~/.paseo/worktrees`, git worktree, `~/.claude/plans/`,
   `~/.claude/projects/*/memory/`, `~/.claude/todos/`)
-- `git commit`/`branch`/`checkout`/`merge`/`rebase` branch local
-- `git push` lên feature branch
+- `git commit`/`branch`/`checkout`/`merge`/`rebase` trên nhánh local
+- `git push` lên một feature branch
 - `gh pr create`/`edit`/`checks`/`merge --squash` (merge chỉ thật sự xảy ra
   khi CI và branch protection cho phép)
 - Đọc hoặc network GET
 - Vòng lặp `sleep`/polling
 
-**Jev thấy gì.** Mỗi gate — và cả hook `AskUserQuestion` ở mục 1 — dựng
-cùng một `state` có cấu trúc (`lib/context.mjs`), nhắm tới thứ một người
-review cẩn thận thật sự nhìn vào, lấp theo đúng thứ tự ưu tiên này (4 mục
-cuối bị bỏ trước nếu hết ngân sách):
+</details>
+
+<details>
+<summary>Jev được cho xem gì (thứ tự ưu tiên của <code>state</code>)</summary>
+
+Mọi gate — và hook `AskUserQuestion` ở mục 1 — đều dựng cùng một `state` có
+cấu trúc (`lib/context.mjs`), nhắm tới những gì một reviewer con người cẩn
+thận thật sự sẽ xem, điền theo thứ tự ưu tiên sau (bốn mục thấp nhất bị bỏ
+trước nếu hết ngân sách):
 
 1. `preferences` — CLAUDE.md (global, project root, project `.claude/`) và
-   memory bền vững, **nguyên văn file, không bao giờ là mô tả Claude tự
-   viết**. Xem "Bằng chứng, không mô tả" bên dưới.
-2. `user_past_choices` — 30 lần gần nhất người dùng thực sự được hỏi và đã
-   chọn gì (cùng project trước), across mọi phiên. Đo được là quan trọng:
-   cùng một câu hỏi delegation, `merge_now=0.98` với đoạn "user preferences"
-   do LLM viết, nhưng `clean_then_merge=1.00` — đúng cái người dùng chọn —
-   khi đổi sang 7 lựa chọn thật của họ.
-3. `task` — `current_task` (tin nhắn mới nhất) cộng 5 tin nhắn gần nhất làm
-   nền.
-4. `action` — đúng thứ đang được xét: lệnh, hoặc với Edit/Write/MultiEdit là
-   nội dung `before`/`after` thật, không chỉ đường dẫn.
-5. `plan_and_todos` — state `TodoWrite` mới nhất và/hoặc file plan tham
-   chiếu dưới `~/.claude/plans/` (đường dẫn được resolve và kiểm tra nằm
-   đúng trong thư mục đó trước khi đọc — không cho `../` đi lệch ra ngoài).
-6. `session_summary` — nếu phiên đã qua `/compact`, bản tóm tắt đó nguyên
-   văn, để Jev không mù trước cửa sổ hiện đang thấy.
-7. `conversation` — các lượt gần nhất, mới nhất trước, lấp phần ngân sách
-   còn lại sau 1–6.
-8. `history` — 10 quyết định gần nhất của chính Jev trong phiên, để nhất
-   quán.
-9. `permissions` — pattern `allow`/`deny` từ `settings.json` — lệnh đã
-   allow-list thì không bao giờ bị chấm risky.
-10. `workspace` — branch, `git status`, `git diff --stat`, nội dung `git
-    diff` thật (bị chặn, và bỏ hẳn hunk của file `.env*`/`*.pem`/`*.key`/
-    `*secret*` dù đã được track), và danh sách file.
-11. `env` — cwd, giờ hiện tại, platform.
+   memory bền vững, **nguyên văn nội dung file** — không bao giờ là mô tả
+   Claude tự viết về người dùng. Xem "Bằng chứng, không phải mô tả cảm
+   tính" bên dưới.
+2. `user_past_choices` — 30 lần gần nhất người dùng thật sự được hỏi và đã
+   chọn gì (ưu tiên cùng project trước), trên mọi session. Đã đo được là có
+   ý nghĩa: cùng một câu hỏi về delegation cho điểm `merge_now=0.98` với một
+   đoạn "user preferences" do LLM viết, nhưng `clean_then_merge=1.00` —
+   option người dùng thật sự chọn — khi cho xem 7 lựa chọn thật của họ thay
+   vào đó.
+3. `task` — `current_task` (tin nhắn mới nhất của người dùng) cộng 5 tin
+   nhắn gần nhất để lấy bối cảnh.
+4. `action` — chính xác điều đang được phán đoán: câu lệnh, hoặc với
+   Edit/Write/MultiEdit là nội dung `before`/`after` thật, không chỉ đường
+   dẫn.
+5. `plan_and_todos` — trạng thái `TodoWrite` mới nhất và/hoặc một file plan
+   được tham chiếu dưới `~/.claude/plans/` (đường dẫn được resolve và kiểm
+   tra nằm trong thư mục đó trước khi đọc — không cho `../` traversal).
+6. `session_summary` — nếu session đã qua `/compact`, bản tóm tắt đó nguyên
+   văn, để Jev không mù trước mọi thứ trước cửa sổ hiển thị.
+7. `conversation` — các lượt gần đây, mới nhất trước, lấp đầy phần ngân
+   sách còn lại sau mục 1–6.
+8. `history` — 10 quyết định gần nhất của chính Jev trong session, để giữ
+   nhất quán.
+9. `permissions` — pattern `allow`/`deny` từ `settings.json` — một lệnh đã
+   nằm trong allowlist không bao giờ bị đánh giá là rủi ro.
+10. `workspace` — branch, `git status`, `git diff --stat`, nội dung
+    `git diff` thật (có giới hạn, hunk của các file
+    `.env*`/`*.pem`/`*.key`/`*secret*` bị bỏ dù có track), và danh sách file.
+11. `env` — cwd, thời gian hiện tại, platform.
 
-**Bằng chứng, không mô tả.** Không có gì trong `state` là mô tả do Claude tự
-viết về người dùng — không có kiểu văn xuôi "user thích X" viết ngay lúc
-chạy. Mỗi field hoặc là lời người dùng tự viết (tin nhắn), file của chính họ
-(CLAUDE.md, MEMORY.md), hoặc bản ghi họ thực sự đã chọn gì
-(`user_past_choices`, từ hook `PostToolUse` trên `AskUserQuestion` ghi lại
-mọi câu trả lời thật). Một test tĩnh ép luật này: không gate nào được xây
-field `preferences`/`user_*` từ một chuỗi literal.
+**Bằng chứng, không phải mô tả cảm tính.** Không có gì trong `state` là mô
+tả Claude tự viết về người dùng — không có đoạn "user prefers X" viết ngay
+tại chỗ. Mỗi field đều là lời của chính người dùng (tin nhắn), file của
+chính họ (CLAUDE.md, MEMORY.md), hoặc bản ghi những gì họ thật sự chọn
+(`user_past_choices`, từ một hook `PostToolUse` trên `AskUserQuestion` ghi
+lại mọi câu trả lời thật). Một test tĩnh áp đặt điều này: không gate nào
+được phép dựng field `preferences`/`user_*` từ một chuỗi literal.
 
-Tất cả bị chặn ở `ASK_JEV_STATE_CHARS` (mặc định `100000` — một state thật ~33
-nghìn ký tự đo được khoảng 1.8s round-trip, và một state thật 90 nghìn ký tự
-vẫn 200 sạch; gateway không công bố giới hạn nào nên đây là trần tự đặt có
-biên an toàn, không phải bức tường đo được thật). Trần này ép trên kích
-thước thật của `JSON.stringify(state).length` khi lấp từng phần theo đúng
-thứ tự ưu tiên, không phải tổng kích thước riêng từng phần cộng lại — phần
-nào không vừa thì bị cắt (giữ đầu, đánh dấu `…[truncated]`) hoặc bỏ hẳn nếu
-hết sạch chỗ. Mỗi gate có ngân sách 4s (riêng phần trả lời `AskUserQuestion`
-của `ask-jev.mjs` là 8s) — tự chia đôi thành 2 attempt ~1850ms để dù có retry
-(xem bên dưới) cũng không vượt ngân sách — và timeout trong `hooks.json` của
-mỗi hook đặt bằng `budget/1000 + 1s` margin nhân với số lần gọi tuần tự gate
-đó có thể làm (6s cho gate chỉ gọi 1 lần, 16s cho `stop` gọi tối đa 3 lần,
-10s cho `ask-jev.mjs`). State chậm hoặc quá khổ chỉ khiến gate "im lặng"
-chứ không chặn bạn. Hạ `ASK_JEV_STATE_CHARS` nếu muốn gate nhanh hơn, đổi lại
-ít ngữ cảnh hơn. Mỗi lần
-gọi đều log kích thước từng phần bằng ký tự dưới dạng `state_sizes` — không
-bao giờ log nội dung — để tinh chỉnh ngân sách từ `bin/jev.mjs stats` mà
-không lộ gì.
+Toàn bộ bị giới hạn ở `ASK_JEV_STATE_CHARS` (mặc định `100000` — một state
+thật ~33k ký tự đo được round-trip ~1.8s và một state thật 90k ký tự vẫn
+nhận 200 sạch; gateway không công bố giới hạn nào, nên đây là trần tự đặt
+có biên độ dư, không phải một bức tường đã đo). Giới hạn được áp trên độ
+dài `JSON.stringify(state).length` thật sự khi các phần được thêm vào theo
+thứ tự ưu tiên, không phải tổng kích thước nội bộ của từng phần — một phần
+không vừa sẽ bị cắt (giữ phần đầu, đánh dấu `…[truncated]`) hoặc bỏ hẳn nếu
+không còn chỗ. Mỗi lời gọi gate được cấp ngân sách 4s (việc trả lời
+`AskUserQuestion` của `ask-jev.mjs` được cấp 8s) — chia nội bộ thành hai lần
+thử ~1850ms để một lần retry không bao giờ vượt ngân sách — và timeout
+trong `hooks.json` cho mỗi hook được đặt là `budget/1000 + 1s` biên độ nhân
+với số lời gọi tuần tự mà một gate có thể thực hiện (6s cho các gate gọi một
+lần, 16s cho tối đa ba lần của `stop`, 10s cho `ask-jev.mjs`). Một state
+chậm hoặc quá khổ sẽ suy biến thành "không phát ra gì" thay vì chặn bạn lại.
+Giảm `ASK_JEV_STATE_CHARS` nếu bạn muốn gate nhanh hơn, đánh đổi bằng ít
+ngữ cảnh hơn. Mỗi lời gọi ghi log kích thước theo ký tự của từng phần dưới
+dạng `state_sizes` — không bao giờ ghi nội dung — để ngân sách có thể tinh
+chỉnh từ `bin/jev.mjs stats` mà không lộ gì cả.
 
-Quy tắc fail-open giống mọi nơi khác: không có khoá API, gateway lỗi, hay
-timeout đều khiến gate im lặng — không bao giờ chặn bạn.
+Cùng nguyên tắc fail-open như mọi nơi khác: không có API key, gateway lỗi,
+hoặc timeout đều khiến gate im lặng — không bao giờ là một điểm chặn.
 
-## 4. Tự trị
+</details>
 
-`ASK_JEV_AUTONOMY` quyết định ask-jev tự làm thay bao nhiêu thay vì hỏi bạn —
-**`full` là mặc định**; đặt `safe` để quay lại hành vi trước autonomy (Jev
-chỉ bao giờ tự *trả lời* thay bạn, không bao giờ tự chạy tiếp qua một câu
-hỏi hay một lần dừng).
+### 4. Autonomy
 
-Một guardrail không bao giờ tắt, ở cả hai mode: boolean `destructive` — xem
-["thế nào là destructive"](#3-cổng-tự-động) — và `p ≥ 0.6` luôn đưa quyết
-định về tay bạn, dù full autonomy hay không.
+`ASK_JEV_AUTONOMY` kiểm soát mức độ ask-jev tự hành động thay vì hỏi bạn —
+**`full` là mặc định**; đặt thành `safe` để quay về hành vi trước khi có
+autonomy (Jev chỉ bao giờ tự *trả lời* thay bạn, không bao giờ tự tiến hành
+qua một câu hỏi hay một lần dừng).
 
-Full thay đổi gì:
+Một lằn ranh không bao giờ tắt, dù ở chế độ nào: một boolean `destructive` —
+xem ["thế nào là phá huỷ"](#3-các-gate-tự-động) — và `p ≥ 0.6` luôn đưa
+quyết định về cho bạn.
 
-- **`AskUserQuestion`** — câu hỏi `personal` (có phải chuyện của bạn không)
-  một mình không còn khiến fallback nữa; chỉ `destructive` mới. Câu Jev đủ
-  chắc thì vẫn được trả lời kể cả khi đọc giống sở thích riêng, miễn không
-  destructive.
-- **Gate `prompt`** — prompt mập mờ không còn biến thành "hỏi người dùng"
-  nữa. Thay vào đó Jev chấm nghĩa đen có chạy được không: được thì Claude
-  chạy tiếp và nêu giả định trong một dòng; không thì Claude chọn cách hiểu
-  hợp với yêu cầu gốc nhất, nêu giả định đó, rồi chạy tiếp. Đằng nào cũng
-  không có câu hỏi nào tới tay bạn.
-- **Gate `stop`** — nếu tin nhắn cuối của assistant kết bằng một câu hỏi xin
-  phép ("bạn có muốn tôi…", "tôi có nên…"), Jev chấm việc gì nên xảy ra: trả
-  lời được và không destructive → chặn dừng lại kèm đáp án của Jev và lệnh
-  không hỏi lại; đã xong việc rồi → cho dừng; destructive hoặc thật sự là
-  chuyện của bạn → cho dừng để câu hỏi thật sự tới tay bạn.
-- **Gate `permission`** — ngưỡng allow là `ASK_JEV_ALLOW_THRESHOLD` (mặc định
-  `0.8` ở `full`, `0.9` ở `safe`) thay vì cố định `0.9`; quan trọng hơn,
-  `destructive` giờ tự nó là sàn cứng. Ở full autonomy, bất cứ gì Jev chấm
-  không destructive (`< 0.3`) đều chạy tiếp — `safe` không còn phải đạt
-  ngưỡng nữa; `0.3–0.6` vẫn hỏi lại; `≥ 0.6` luôn hỏi lại.
+Những gì thay đổi ở `full`:
 
-Mọi quyết định tự trị vẫn được log với đúng dạng `label` + `confidence` +
-`reason` như mọi nơi khác — không có gì ở đây là im lặng, chỉ là không còn
-đi qua bạn nữa.
+- **`AskUserQuestion`** — kiểm tra `personal` (đây có phải việc của người
+  dùng không?) không còn tự nó gây fallback; chỉ `destructive` mới gây. Một
+  câu hỏi Jev tự tin vẫn được trả lời dù nó đọc như sở thích cá nhân, miễn
+  là không phá huỷ.
+- **gate `prompt`** — một prompt mơ hồ không bao giờ biến thành "hỏi người
+  dùng" nữa. Thay vào đó Jev phán đoán xem cách hiểu nghĩa đen có khả thi
+  không: nếu có, Claude tiến hành và nêu rõ giả định trong một dòng; nếu
+  không, Claude chọn cách hiểu nhất quán nhất với task ban đầu, nêu rõ giả
+  định đó, và tiến hành. Dù theo cách nào, không câu hỏi nào tới tay bạn.
+- **gate `stop`** — nếu tin nhắn cuối của assistant kết thúc bằng việc hỏi
+  bạn một câu hoặc xin phép ("bạn có muốn tôi…", "tôi nên…?"), Jev phán
+  đoán nên làm gì: trả lời được và không phá huỷ → lần dừng bị chặn kèm đáp
+  án của Jev và chỉ dẫn không hỏi lại; đã thoả mãn rồi → lần dừng vẫn diễn
+  ra; phá huỷ hoặc thật sự là việc của bạn → lần dừng vẫn diễn ra để câu
+  hỏi thật sự tới tay bạn.
+- **gate `permission`** — ngưỡng cho phép là `ASK_JEV_ALLOW_THRESHOLD`
+  (mặc định `0.8` ở `full`, `0.9` ở `safe`) thay vì một con số cố định
+  `0.9`; quan trọng hơn, `destructive` giờ là lằn ranh cứng đứng một mình.
+  Ở autonomy full, bất cứ gì Jev đánh giá không phá huỷ (`< 0.3`) đều được
+  tiếp tục — `safe` không cần đạt ngưỡng đó nữa; `0.3–0.6` vẫn hỏi; `≥ 0.6`
+  luôn hỏi.
 
-## Thống kê sử dụng
+Mọi quyết định tự động vẫn được ghi log với cùng cấu trúc `label` +
+`confidence` + `reason` như mọi thứ khác — không có gì ở đây là âm thầm cả,
+chỉ là không còn đi qua bạn nữa.
 
-Mỗi lần gọi gateway và mỗi quyết định của hook được ghi thành một dòng JSON
-vào `~/.claude/ask-jev.log` (đổi đường dẫn bằng `ASK_JEV_LOG_FILE`, tắt hẳn bằng
-`ASK_JEV_LOG=0`). Mỗi dòng quyết định mang theo `gate` nào tạo ra nó (`ask`,
-`permission`, `stop`, `bash`, `prompt`), đáp án của Jev dạng `label` +
-`confidence`, và một `reason` ngắn — đúng phần tiêu chí Jev khớp — không bao
-giờ ghi transcript hội thoại hay payload `state` gửi cho Jev.
+## Configuration
+
+Tất cả đều tuỳ chọn — mặc định đã hợp lý sẵn.
+
+| Biến | Mặc định | |
+|---|---|---|
+| `AI_GATEWAY_API_KEY` | đọc `~/.claude/ask-jev.key` | Vercel AI Gateway key của bạn |
+| `ASK_JEV_API_KEY` | — | alias cho `AI_GATEWAY_API_KEY`, được kiểm tra trước |
+| `ASK_JEV_ASK_THRESHOLD` | `0.8` | hạ xuống để Jev tự trả lời nhiều hơn (và sai nhiều hơn) |
+| `ASK_JEV_REMIND` | (bật) | đặt `0` để tắt lời nhắc "ask Jev" mỗi lượt |
+| `ASK_JEV_GATES` | `permission,stop,bash,prompt` | danh sách các [gate tự động](#3-các-gate-tự-động) đang bật, phân tách bởi dấu phẩy; để trống tắt cả bốn |
+| `ASK_JEV_STATE_CHARS` | `100000` | số ký tự ngữ cảnh tối đa gửi cho Jev mỗi lần gọi gate — giảm xuống để gate nhanh/rẻ hơn |
+| `ASK_JEV_AUTONOMY` | `full` | [chế độ autonomy](#4-autonomy); đặt `safe` để chỉ tự trả lời, không bao giờ tự tiến hành |
+| `ASK_JEV_ALLOW_THRESHOLD` | `0.8` full / `0.9` safe | ngưỡng tự cho phép của gate `permission` |
+| `ASK_JEV_MODEL` | `typesafe-ai/jev` | model nào chạy đánh giá cho Jev |
+| `ASK_JEV_GATEWAY_URL` | endpoint đánh giá của Vercel | chỉ cần khi dùng gateway riêng |
+
+Các tên `JEV_*` vẫn hoạt động nhưng đã deprecated.
+
+Đường dẫn key cũ `~/.claude/jev-ask.key` (từ trước khi plugin đổi tên) vẫn
+được đọc như fallback, nên không có gì hỏng nếu bạn đã thiết lập dưới tên
+cũ.
+
+## Usage analytics
+
+Mỗi lời gọi gateway và mỗi quyết định của hook được ghi thêm một dòng JSON
+vào `~/.claude/ask-jev.log` (đổi đường dẫn bằng `ASK_JEV_LOG_FILE`, tắt hẳn
+bằng `ASK_JEV_LOG=0`). Mỗi dòng quyết định mang theo `gate` nào tạo ra nó
+(`ask`, `permission`, `stop`, `bash`, `prompt`), đáp án của Jev dưới dạng
+`label` + `confidence`, và một `reason` ngắn — phần tiêu chí Jev khớp,
+không bao giờ là transcript hội thoại hay payload `state` đã gửi cho Jev.
 
 Xem bằng:
 
 ```
 node ~/.claude/plugins/marketplaces/ask-jev/bin/jev.mjs stats
 ```
+
+<details>
+<summary>Output mẫu và phần chia nhỏ theo <code>by_gate</code></summary>
 
 ```
 Calls: 19 (ok 18, error 1)
@@ -374,111 +418,119 @@ Recent decisions:
   2026-09-22T10:02:47.000Z  allow              rm dist/old-build.js           safe (0.97)
 ```
 
-Thu hẹp khoảng thời gian bằng `--last N` hoặc `--since 7d|24h`, thêm `--json` để lấy số liệu thô thay vì báo cáo dạng text.
+Thu hẹp khoảng thời gian bằng `--last N` hoặc `--since 7d|24h`, hoặc thêm `--json` để lấy dữ liệu tổng hợp thô thay vì báo cáo dạng text.
 
-`decisions.by_gate` chia đúng những con số đó theo từng gate — `{ total, positive, by_outcome }` — vì mỗi gate định nghĩa "positive" khác nhau (một quyết định `ask` mà Jev trả lời thẳng, một `permission` mà Jev tự allow, một lần chạy `bash` Jev chấm `success`, …). "Fell back to user" chỉ đếm đúng hai trường hợp câu hỏi/permission thực sự quay lại tay bạn: một câu `ask` không được trả lời, hoặc một `permission` gate ép phải hỏi. "User overrides" đếm sự kiện `user_choice` — mỗi câu trả lời thật bạn đưa cho `AskUserQuestion`, được một hook `PostToolUse` ghi lại và đưa ngược vào `user_past_choices` cho các quyết định sau.
+`decisions.by_gate` chia nhỏ cùng con số đó theo từng gate — `{ total, positive, by_outcome }` — vì mỗi gate định nghĩa "positive" khác nhau (một quyết định `ask` được Jev trả lời thẳng, một quyết định `permission` được Jev tự cho phép, một lần chạy `bash` được Jev đánh giá `success`, …). "Fell back to user" chỉ đếm hai trường hợp một câu hỏi hoặc permission prompt thật sự tới tay bạn: một câu hỏi `ask` chưa được trả lời, hoặc một gate `permission` buộc phải hỏi. "User overrides" đếm các sự kiện `user_choice` — mọi câu trả lời thật bạn đưa cho `AskUserQuestion`, được một hook `PostToolUse` ghi lại và đưa ngược vào `user_past_choices` cho các quyết định sau này.
 
-**Lưu ý:** `${CLAUDE_PLUGIN_ROOT}` chỉ có sẵn bên trong hooks/skills của Claude Code; để gọi CLI từ terminal, dùng `~/.claude/plugins/marketplaces/ask-jev/bin/jev.mjs` hoặc alias `jev`.
+</details>
+
+**Lưu ý:** `${CLAUDE_PLUGIN_ROOT}` khả dụng bên trong hook/skill của Claude Code; với lời gọi CLI thủ công từ terminal, dùng `~/.claude/plugins/marketplaces/ask-jev/bin/jev.mjs` hoặc alias `jev`.
 
 ### Trong Paseo
 
-Repo này có sẵn `paseo.json` với hai workspace script: `jev:stats` (chạy báo
-cáo ở trên) và `jev:log` (`tail -f` file log). Mở chúng từ panel scripts của
-Paseo để xem số liệu sử dụng mà không cần rời khỏi app.
+Repo này đi kèm `paseo.json` với hai workspace script: `jev:stats` (chạy
+báo cáo ở trên) và `jev:log` (`tail -f` trên file log). Mở chúng từ script
+panel của Paseo để xem usage mà không cần rời khỏi app.
 
-Muốn dashboard sống động hơn một script, cài [Paseo plugin](paseo-plugin/README.md)
-— một workspace panel với ô số liệu, bộ lọc theo gate cạnh phân bố outcome, và
-bảng quyết định cập nhật liên tục (Time, Gate, Outcome, Question/Subject,
-Answer, Reason). Chạm vào một dòng để xem toàn bộ bản ghi. Settings →
-Plugins → dán vào ô "Plugin source" → Install:
+Muốn có dashboard trực tiếp thay vì script, cài
+[Paseo plugin](paseo-plugin/README.md) — một workspace panel với stat
+tile, bộ lọc theo gate cùng bảng phân tích outcome, và một bảng quyết định
+cập nhật trực tiếp (Time, Gate, Outcome, Question/Subject, Answer, Reason).
+Click vào một dòng để xem đầy đủ. Settings → Plugins → dán vào "Plugin
+source" → Install:
 
 ```
 github:yanmad27/ask-jev:paseo-plugin
 ```
 
-## Cấu hình
+## Upgrade
 
-Tất cả đều tuỳ chọn — mặc định đã hợp lý sẵn.
+### Claude Code
 
-| Biến | Mặc định | |
-|---|---|---|
-| `AI_GATEWAY_API_KEY` | đọc `~/.claude/ask-jev.key` | khoá Vercel AI Gateway của bạn |
-| `ASK_JEV_API_KEY` | — | tên khác của `AI_GATEWAY_API_KEY`, được kiểm tra trước |
-| `ASK_JEV_ASK_THRESHOLD` | `0.8` | hạ xuống để Jev tự trả lời nhiều hơn (và cũng sai nhiều hơn) |
-| `ASK_JEV_REMIND` | (bật) | đặt `0` để tắt lời nhắc "hỏi Jev" mỗi lượt |
-| `ASK_JEV_GATES` | `permission,stop,bash,prompt` | danh sách phẩy các [cổng tự động](#3-cổng-tự-động) đang bật; rỗng thì tắt hết |
-| `ASK_JEV_STATE_CHARS` | `100000` | số ký tự ngữ cảnh tối đa gửi cho Jev mỗi lần gọi gate — hạ xuống để gate nhanh/rẻ hơn |
-| `ASK_JEV_AUTONOMY` | `full` | [mode tự trị](#4-tự-trị); đặt `safe` để chỉ tự trả lời thay, không bao giờ tự chạy tiếp |
-| `ASK_JEV_ALLOW_THRESHOLD` | `0.8` full / `0.9` safe | ngưỡng tự allow của gate `permission` |
-| `ASK_JEV_MODEL` | `typesafe-ai/jev` | model nào Jev dùng để đánh giá |
-| `ASK_JEV_GATEWAY_URL` | endpoint đánh giá của Vercel | chỉ cần đổi nếu dùng gateway riêng |
+1. Làm mới marketplace:
 
-Tên `JEV_*` cũ vẫn dùng được nhưng đã deprecated.
+   ```
+   /plugin marketplace update ask-jev
+   ```
 
-File khoá cũ `~/.claude/jev-ask.key` (từ trước khi plugin đổi tên) vẫn được
-đọc như phương án dự phòng, nên không có gì hỏng nếu bạn từng đặt theo tên cũ.
+2. Cập nhật plugin:
 
-## Đóng góp / Sửa plugin
+   ```
+   /plugin update ask-jev@ask-jev
+   ```
 
-Đang phát triển plugin trên máy? Trỏ marketplace vào thư mục làm việc thay vì
-GitHub, để sửa xong là chạy luôn, không phải push rồi update:
+File key đã đổi tên `jev-ask.key` → `ask-jev.key`; tên cũ vẫn được đọc như
+fallback, nên không cần migrate gì cả. Khởi động lại Claude Code sau khi
+nâng cấp — hook chỉ reload ở một session mới.
+
+### Paseo plugin
+
+`paseo plugin update ask-jev` (lấy bản mới nhất từ main, rồi reload). Sau đó Cmd+R / khởi động lại Paseo để UI load bundle client mới.
+
+## Contributing
+
+Đang phát triển plugin trên máy local? Trỏ marketplace vào working copy của
+bạn thay vì GitHub, để chỉnh sửa có tác dụng ngay, không cần vòng lặp
+push-rồi-update:
 
 ```
 /plugin marketplace add ~/workspace/ask-jev
 ```
 
-Commit theo [Conventional Commits](https://www.conventionalcommits.org)
-(`feat:`/`fix:`/`docs:`…) — release-please tự mở PR release, tự tăng version
-trong `plugin.json` và gắn tag khi merge, không cần tag tay.
+Commit theo chuẩn [Conventional Commits](https://www.conventionalcommits.org)
+(`feat:`/`fix:`/`docs:`…) — release-please mở một PR release tự bump
+`plugin.json` và gắn tag khi merge, nên không cần tag thủ công.
 
 ### Evals
 
-`skills/ask-jev` và các hook được kiểm bằng các case `claude plugin eval`
-trong `evals/` — trigger evals (skill có chạy đúng lúc không, và im lặng
-đúng lúc không), behaviour rubrics (evidence phải verbatim, không có bucket
-`undetermined`, không tự bịa sở thích người dùng), và CLI contract cho
-`bin/jev.mjs`. Chạy ở máy bằng:
+`skills/ask-jev` và các hook được phủ bởi các case `claude plugin eval` dưới
+`evals/` — trigger eval (skill có kích hoạt đúng lúc, và im lặng đúng lúc
+không), behaviour rubric (bằng chứng nguyên văn, không có nhóm
+`undetermined`, không bịa sở thích), và kiểm tra hợp đồng CLI cho
+`bin/jev.mjs`. Chạy local bằng:
 
 ```
 ./scripts/eval.sh --trust-plugin
 ```
 
-Mỗi case sinh ra một agent Claude Code thật, nên cần `claude` đã đăng nhập
-(hoặc `ANTHROPIC_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN` trong environment). Job
-`.github/workflows/evals.yml` chạy lại bộ eval mỗi tuần nếu có secret
-`CLAUDE_CODE_OAUTH_TOKEN` hoặc `ANTHROPIC_API_KEY` trong repo, không có thì
-bỏ qua gọn gàng — job này không bao giờ chặn CI của pull request.
+Mỗi case sinh ra một agent Claude Code thật, nên bạn cần một `claude` đã
+đăng nhập (hoặc `ANTHROPIC_API_KEY`/`CLAUDE_CODE_OAUTH_TOKEN` trong môi
+trường). Một job `.github/workflows/evals.yml` hàng tuần chạy lại bộ eval
+này nếu có secret `CLAUDE_CODE_OAUTH_TOKEN` hoặc `ANTHROPIC_API_KEY` trong
+repo, hoặc bỏ qua gọn gàng nếu không có — nó không bao giờ chặn CI của pull
+request.
 
 ## Ghi chú triển khai
 
 <details>
-<summary>Hook thực sự chặn câu hỏi kiểu gì, và vì sao lại có thêm một hook bạn không bao giờ tự gọi</summary>
+<summary>Hook thật sự chặn một câu hỏi như thế nào, và vì sao có một hook thứ hai bạn không bao giờ gọi trực tiếp</summary>
 
 <br>
 
-**Không phụ thuộc npm.** Chỉ dùng `fetch` và `fs` của Node, gọi thẳng endpoint
-đánh giá của gateway. Clone về là chạy — không cần `npm install`, không có
-`node_modules`.
+**Không có dependency npm nào.** Chỉ dùng `fetch` và `fs` của Node, gọi
+thẳng endpoint đánh giá của gateway. Clone về là chạy được — không cần
+`npm install`, không `node_modules`.
 
-**"Trả lời thay bạn" thực chất là một lần từ chối.** Claude Code không cho
-hook trả về tool result giả. Nhưng `PreToolUse` hook trả về
-`permissionDecision: "deny"` thì `permissionDecisionReason` được đưa thẳng
-ngược vào model — nên "đáp án" của ask-jev thực chất là *chặn câu hỏi lại và
-nói cho Claude biết đáp án*. Trong phiên bạn sẽ thấy một dòng
-`Jev answered: ...` rồi Claude đi tiếp như thể chính bạn vừa gõ đáp án đó.
+**"Trả lời thay bạn" thật ra là một lần từ chối.** Claude Code không cho
+hook cách nào trả về một kết quả tool giả lập. Nhưng một hook `PreToolUse`
+trả về `permissionDecision: "deny"` sẽ có `permissionDecisionReason` được
+đưa thẳng lại cho model — nên "câu trả lời" của ask-jev thật ra là *chặn
+câu hỏi lại và nói cho Claude biết đáp án là gì*. Bạn sẽ thấy một dòng
+`Jev answered: ...` trong session, và Claude tiếp tục như thể bạn vừa gõ nó.
 
-**Vì sao có thêm hook `SessionStart`.** Claude Code hiện không chạy
-`PreToolUse` hook khai trong plugin
+**Vì sao có thêm một hook `SessionStart`.** Claude Code hiện không chạy hook
+`PreToolUse` của riêng plugin
 ([anthropics/claude-code#36397](https://github.com/anthropics/claude-code/issues/36397))
-— chỉ `SessionStart` từ plugin là chạy được. Nên `hooks/self-register.mjs`
-chạy mỗi `SessionStart`, tự ghi entry `PreToolUse` thẳng vào
-`~/.claude/settings.json` của bạn — nơi hook vẫn chạy bình thường — và tự cập
-nhật lại đường dẫn mỗi khi plugin lên bản mới. Nó chỉ đụng đúng entry của
-mình, phần còn lại của `settings.json` giữ nguyên. Khi nào upstream sửa xong
-thì entry này thừa nhưng vô hại — tốn nhiều lắm là thêm một lần gọi gateway.
+— chỉ `SessionStart` chạy ổn định từ một plugin. Nên `hooks/self-register.mjs`
+chạy ở mỗi `SessionStart` và ghi thẳng entry `PreToolUse` vào
+`~/.claude/settings.json` của bạn, nơi hook được biết là hoạt động — đồng
+thời giữ đường dẫn luôn cập nhật qua các lần nâng cấp plugin. Nó chỉ đụng
+vào đúng entry của chính nó và để yên phần còn lại của `settings.json`.
+Một khi upstream sửa lỗi đó, đây trở thành một bản trùng vô hại — tệ nhất
+là tốn thêm một lời gọi gateway.
 
-**Ngữ cảnh** lấy từ 12 lượt gần nhất của transcript phiên (bỏ lượt subagent
-và lượt máy sinh), cắt còn 6000 ký tự. Mỗi câu hỏi tốn khoảng $0.00002 và mất
-chừng 0.7 giây.
+**Context** lấy từ 12 lượt gần nhất của session transcript (lượt của
+subagent và lượt do máy sinh ra bị bỏ), cắt còn 6000 ký tự. Mỗi câu hỏi tốn
+khoảng $0.00002 và mất khoảng 0.7s.
 
 </details>

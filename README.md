@@ -55,31 +55,30 @@ Questions that are genuinely yours to answer still reach you, unchanged.
 That's it. **No key set →** the plugin quietly does nothing and Claude Code
 asks you exactly as it always has. Nothing to break.
 
-## Upgrade
+## What you'll see
 
-### Claude Code
+When Jev answers a question for you, it shows up as one line in the
+session — `Jev answered: ...` — and Claude carries on as if you'd typed it.
+Everything else (questions that are your call, or that Jev isn't sure about)
+reaches you exactly as before.
 
-1. Refresh the marketplace:
+## How it works
 
-   ```
-   /plugin marketplace update ask-jev
-   ```
+Four pieces, layered on top of each other:
 
-2. Update the plugin:
+1. **[Auto-answer `AskUserQuestion`](#1-auto-answer-askuserquestion)** — the
+   core feature above.
+2. **[Ask Jev before judging](#2-ask-jev-before-judging)** — Claude is
+   reminded to consult Jev for *any* judgement call, not just
+   `AskUserQuestion`, via a skill and CLI.
+3. **[Automatic gates](#3-automatic-gates)** — four hooks ask Jev at the
+   moments a human reviewer would weigh in: is this tool call safe, did the
+   assistant stop too early, did a command succeed, is the prompt ambiguous.
+4. **[Autonomy](#4-autonomy)** — how far ask-jev acts instead of asking you,
+   with one guardrail that never turns off: anything destructive always
+   comes to you.
 
-   ```
-   /plugin update ask-jev@ask-jev
-   ```
-
-The key file was renamed `jev-ask.key` → `ask-jev.key`; the old name is still
-read as a fallback, so there's nothing to migrate. Restart Claude Code after
-upgrading — hooks only reload on a fresh session.
-
-### Paseo plugin
-
-`paseo plugin update ask-jev` (fetches latest main, then reload). Then Cmd+R / restart Paseo so the UI loads the new client bundle.
-
-## 1. Auto-answer `AskUserQuestion`
+### 1. Auto-answer `AskUserQuestion`
 
 Before Claude Code shows you a question, ask-jev sends it to Jev with two
 things to judge:
@@ -94,13 +93,15 @@ Only when Jev is both confident *and* sure the question isn't personal does
 Claude get the answer silently and move on. Otherwise the question reaches
 you exactly as if ask-jev weren't installed.
 
-### Options need real definitions
+<details>
+<summary>Options need real definitions, multiSelect, and when it stays silent</summary>
 
-For Jev to judge anything, each option needs a description that actually
-**defines** it — not just a label. Take "Is this a hamburger?" with an option
-simply labelled "Yes": there's nothing to check that against. "Yes" needs a
-description like *"A hot sandwich: a cooked ground-meat patty inside a sliced
-bun"* — something you could hold the evidence up against and verify.
+**Options need real definitions.** For Jev to judge anything, each option
+needs a description that actually **defines** it — not just a label. Take
+"Is this a hamburger?" with an option simply labelled "Yes": there's nothing
+to check that against. "Yes" needs a description like *"A hot sandwich: a
+cooked ground-meat patty inside a sliced bun"* — something you could hold
+the evidence up against and verify.
 
 If any option in a question is missing a description, ask-jev never calls
 Jev at all — it bounces the question straight back to Claude with
@@ -111,13 +112,12 @@ Under the hood each option is sent as `{what, not_for}` — `not_for` names the
 sibling options it must not overlap with, so the definitions rule each other
 out instead of just sitting side by side.
 
-### Several questions, and multiSelect
-
-Several questions in one `AskUserQuestion` call are answered independently.
-Whichever ones Jev is confident about get used; the rest are handed back to
-you — the reason Claude gets back names the resolved answers and says to
-re-ask only what's left, so a confident answer never gets thrown away just
-because a sibling question stayed unclear.
+**Several questions, and multiSelect.** Several questions in one
+`AskUserQuestion` call are answered independently. Whichever ones Jev is
+confident about get used; the rest are handed back to you — the reason
+Claude gets back names the resolved answers and says to re-ask only what's
+left, so a confident answer never gets thrown away just because a sibling
+question stayed unclear.
 
 `multiSelect` questions go through Jev too: each option becomes its own
 yes/no question ("does this option apply?") instead of one pick. An option
@@ -126,7 +126,7 @@ once it drops below `1 - ASK_JEV_ASK_THRESHOLD`, and the whole question stays
 unresolved if any option lands in between. A resolved answer is the
 comma-joined list of selected labels — possibly "none".
 
-### When it stays silent
+**When it stays silent.**
 
 | Condition | Why |
 |---|---|
@@ -136,15 +136,17 @@ comma-joined list of selected labels — possibly "none".
 | no usable context in the transcript | nothing for Jev to judge against |
 | no key set, Jev errors, or it takes over 8s | a broken helper must never be the reason you can't answer |
 
-## 2. Ask Jev before judging
+</details>
+
+### 2. Ask Jev before judging
 
 A `SessionStart` hook injects a short rule reminding Claude to ask Jev before
 any judgement call — classifying, picking among fixed options, yes/no on
 evidence, ranking — not just when `AskUserQuestion` fires. Two hooks run at
 every session start: `self-register.mjs`, which works around a Claude Code
-bug that stops plugin `PreToolUse` hooks from firing (see Implementation
-notes), and `session-start.mjs`, which injects the rule itself. Both are
-silent if no API key is configured.
+bug that stops plugin `PreToolUse` hooks from firing (see
+[Implementation notes](#implementation-notes)), and `session-start.mjs`,
+which injects the rule itself. Both are silent if no API key is configured.
 
 Since a session-start reminder tends to get forgotten a dozen turns in, the
 `prompt` gate (below) re-injects the same one-line rule on **every** turn via
@@ -193,7 +195,7 @@ The skill (`skills/ask-jev/SKILL.md`) explains what a good request looks
 like — evidence pasted verbatim into `state`, one judgement per question,
 criteria that are observable and mutually exclusive — with worked examples.
 
-## 3. Automatic gates
+### 3. Automatic gates
 
 Beyond auto-answering `AskUserQuestion`, four hooks ask Jev proactively at
 the moments a human reviewer would actually weigh in — no explicit judgement
@@ -211,6 +213,9 @@ The read-only fast path and the `destructive` criteria live in `lib/gate.mjs`,
 shared between the `permission` hook and `bin/jev-eval.mjs`, so a replay uses
 the exact same rules a real decision would. `AskUserQuestion` never reaches
 this gate — it has its own hook (section 1).
+
+<details>
+<summary>What counts as destructive (and what doesn't)</summary>
 
 **What counts as destructive.** Irreversible loss or exposure — no undo, no
 way to get the data or trust back:
@@ -238,10 +243,15 @@ Reversible, so **not** destructive:
 - Reads or network GETs
 - A `sleep`/polling loop
 
-**What Jev is shown.** Every gate — and the `AskUserQuestion` hook from
-section 1 — builds the same structured `state` (`lib/context.mjs`), aiming
-for what a careful human reviewer would actually look at, filled in this
-priority order (lowest four dropped first if the budget runs out):
+</details>
+
+<details>
+<summary>What Jev is shown (the <code>state</code> priority order)</summary>
+
+Every gate — and the `AskUserQuestion` hook from section 1 — builds the same
+structured `state` (`lib/context.mjs`), aiming for what a careful human
+reviewer would actually look at, filled in this priority order (lowest four
+dropped first if the budget runs out):
 
 1. `preferences` — CLAUDE.md (global, project root, project `.claude/`) and
    persistent memory, **verbatim file contents only** — never a description
@@ -288,20 +298,22 @@ added in priority order, not a sum of each section's own internal size —
 a section that doesn't fit is truncated (head kept, marked
 `…[truncated]`) or dropped outright if there's no room at all. Each gate
 call is budgeted at 4s (`ask-jev.mjs`'s `AskUserQuestion` answering gets
-8s) — split internally into two ~1850ms attempts so a retry (see below)
-never blows the budget — and the `hooks.json` timeout for each hook is set
-to `budget/1000 + 1s` margin per sequential call a gate might make (6s for
-the single-call gates, 16s for `stop`'s up to three, 10s for `ask-jev.mjs`).
-A slow or oversized state degrades to "emits nothing" rather than blocking
-you. Lower `ASK_JEV_STATE_CHARS` if you want snappier gates at the cost of less
-context. Every call logs the size in
-characters of each section as `state_sizes` — never the content — so the
-budget can be tuned from `bin/jev.mjs stats` without exposing anything.
+8s) — split internally into two ~1850ms attempts so a retry never blows the
+budget — and the `hooks.json` timeout for each hook is set to
+`budget/1000 + 1s` margin per sequential call a gate might make (6s for the
+single-call gates, 16s for `stop`'s up to three, 10s for `ask-jev.mjs`). A
+slow or oversized state degrades to "emits nothing" rather than blocking
+you. Lower `ASK_JEV_STATE_CHARS` if you want snappier gates at the cost of
+less context. Every call logs the size in characters of each section as
+`state_sizes` — never the content — so the budget can be tuned from
+`bin/jev.mjs stats` without exposing anything.
 
 Same fail-open rules as everywhere else: no API key, a gateway error, or a
 timeout means the gate is silent — never a blocker.
 
-## 4. Autonomy
+</details>
+
+### 4. Autonomy
 
 `ASK_JEV_AUTONOMY` controls how much ask-jev acts instead of asking you —
 **`full` is the default**; set it to `safe` to go back to the pre-autonomy
@@ -340,6 +352,29 @@ Every autonomous decision is still logged with the same `label` +
 `confidence` + `reason` shape as everything else — nothing here is silent,
 it's just no longer routed through you.
 
+## Configuration
+
+All optional — sensible defaults out of the box.
+
+| Variable | Default | |
+|---|---|---|
+| `AI_GATEWAY_API_KEY` | reads `~/.claude/ask-jev.key` | your Vercel AI Gateway key |
+| `ASK_JEV_API_KEY` | — | alias for `AI_GATEWAY_API_KEY`, checked first |
+| `ASK_JEV_ASK_THRESHOLD` | `0.8` | lower it to let Jev answer more often (and be wrong more often) |
+| `ASK_JEV_REMIND` | (on) | set to `0` to stop the per-turn "ask Jev" reminder |
+| `ASK_JEV_GATES` | `permission,stop,bash,prompt` | comma list of enabled [automatic gates](#3-automatic-gates); empty disables all |
+| `ASK_JEV_STATE_CHARS` | `100000` | max characters of context sent to Jev per gate call — lower for faster/cheaper gates |
+| `ASK_JEV_AUTONOMY` | `full` | [autonomy mode](#4-autonomy); set to `safe` to only ever auto-answer, never proceed on its own |
+| `ASK_JEV_ALLOW_THRESHOLD` | `0.8` full / `0.9` safe | `permission` gate's auto-allow threshold |
+| `ASK_JEV_MODEL` | `typesafe-ai/jev` | which model Jev evaluation runs against |
+| `ASK_JEV_GATEWAY_URL` | Vercel's evaluation endpoint | only needed for a custom gateway |
+
+`JEV_*` names still work but are deprecated.
+
+The legacy key path `~/.claude/jev-ask.key` (from before the plugin was
+renamed) is still read as a fallback, so nothing breaks if you set it up
+under the old name.
+
 ## Usage analytics
 
 Every gateway call and every hook decision is appended as one JSON line to
@@ -355,6 +390,9 @@ Inspect it with:
 ```
 node ~/.claude/plugins/marketplaces/ask-jev/bin/jev.mjs stats
 ```
+
+<details>
+<summary>Sample output and the <code>by_gate</code> breakdown</summary>
 
 ```
 Calls: 19 (ok 18, error 1)
@@ -384,6 +422,8 @@ Narrow the window with `--last N` or `--since 7d|24h`, or add `--json` to get th
 
 `decisions.by_gate` breaks the same numbers down per gate — `{ total, positive, by_outcome }` — since each gate defines "positive" differently (an `ask` decision Jev answered outright, a `permission` decision Jev auto-allowed, a `bash` run Jev judged `success`, …). "Fell back to user" only counts the two cases where a question or permission prompt actually reached you: an unanswered `ask` question, or a `permission` gate that forced an `ask`. "User overrides" counts `user_choice` events — every real answer you gave `AskUserQuestion`, captured by a `PostToolUse` hook and fed back into `user_past_choices` for future decisions.
 
+</details>
+
 **Note:** `${CLAUDE_PLUGIN_ROOT}` is available inside Claude Code hooks/skills; for manual CLI calls from your terminal, use `~/.claude/plugins/marketplaces/ask-jev/bin/jev.mjs` or the `jev` alias.
 
 ### In Paseo
@@ -403,28 +443,29 @@ Install:
 github:yanmad27/ask-jev:paseo-plugin
 ```
 
-## Configuration
+## Upgrade
 
-All optional — sensible defaults out of the box.
+### Claude Code
 
-| Variable | Default | |
-|---|---|---|
-| `AI_GATEWAY_API_KEY` | reads `~/.claude/ask-jev.key` | your Vercel AI Gateway key |
-| `ASK_JEV_API_KEY` | — | alias for `AI_GATEWAY_API_KEY`, checked first |
-| `ASK_JEV_ASK_THRESHOLD` | `0.8` | lower it to let Jev answer more often (and be wrong more often) |
-| `ASK_JEV_REMIND` | (on) | set to `0` to stop the per-turn "ask Jev" reminder |
-| `ASK_JEV_GATES` | `permission,stop,bash,prompt` | comma list of enabled [automatic gates](#3-automatic-gates); empty disables all |
-| `ASK_JEV_STATE_CHARS` | `100000` | max characters of context sent to Jev per gate call — lower for faster/cheaper gates |
-| `ASK_JEV_AUTONOMY` | `full` | [autonomy mode](#4-autonomy); set to `safe` to only ever auto-answer, never proceed on its own |
-| `ASK_JEV_ALLOW_THRESHOLD` | `0.8` full / `0.9` safe | `permission` gate's auto-allow threshold |
-| `ASK_JEV_MODEL` | `typesafe-ai/jev` | which model Jev evaluation runs against |
-| `ASK_JEV_GATEWAY_URL` | Vercel's evaluation endpoint | only needed for a custom gateway |
+1. Refresh the marketplace:
 
-`JEV_*` names still work but are deprecated.
+   ```
+   /plugin marketplace update ask-jev
+   ```
 
-The legacy key path `~/.claude/jev-ask.key` (from before the plugin was
-renamed) is still read as a fallback, so nothing breaks if you set it up
-under the old name.
+2. Update the plugin:
+
+   ```
+   /plugin update ask-jev@ask-jev
+   ```
+
+The key file was renamed `jev-ask.key` → `ask-jev.key`; the old name is still
+read as a fallback, so there's nothing to migrate. Restart Claude Code after
+upgrading — hooks only reload on a fresh session.
+
+### Paseo plugin
+
+`paseo plugin update ask-jev` (fetches latest main, then reload). Then Cmd+R / restart Paseo so the UI loads the new client bundle.
 
 ## Contributing
 
