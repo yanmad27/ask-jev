@@ -208,6 +208,18 @@ async function main() {
     return;
   }
   if (input.tool_name !== "AskUserQuestion") return;
+
+  // Trong Paseo, AskUserQuestion là "permission request" native (kind:"question") do
+  // người dùng trả lời trên UI. Hook Claude Code chỉ có permissionDecision "deny" để
+  // đưa văn bản ngược vào model — Paseo hiển thị "deny" đó thành khối lỗi đỏ
+  // "PreToolUse:AskUserQuestion hook error", trông như hỏng dù đáp án của Jev vẫn tới
+  // model. Nên trong Paseo hook đứng im: để câu hỏi hiện bình thường cho người dùng,
+  // không auto-answer, không lỗi đỏ. PASEO_AGENT_ID chỉ tồn tại trong agent của Paseo.
+  if (process.env.PASEO_AGENT_ID) {
+    logEvent({ kind: "decision", source: "hook", gate: "ask", session_id: input.session_id, outcome: "paseo_standdown" });
+    return;
+  }
+
   if (isDuplicate(input)) return;
   currentSessionId = input.session_id;
 
@@ -278,9 +290,13 @@ async function main() {
     .join("\n");
   const unresolved = questions.filter((_, i) => !results[i]?.label).map((q) => `"${q.question}"`);
 
+  // Đây không phải lỗi: Claude Code chỉ có permissionDecision "deny" để đưa văn bản
+  // ngược vào model, nên câu trả lời của Jev buộc phải đi qua đường "deny" và UI
+  // hiển thị nó dưới nhãn đỏ "hook error". Mở đầu reason bằng "Not a real error" để
+  // người liếc qua transcript hiểu ngay đây là câu Jev tự trả lời, không phải hỏng.
   const reason = unresolved.length === 0
-    ? `Jev answered on the user's behalf from conversation context. Do NOT ask again — use these choices and continue:\n${answered}`
-    : `Jev answered some of these on the user's behalf from conversation context. Use these, do not re-ask them:\n` +
+    ? `Not a real error — Jev already answered this for you from the conversation, so you don't have to ask. Use these choices and continue; do not re-ask:\n${answered}`
+    : `Not a real error — Jev already answered some of these for you from the conversation. Use these, do not re-ask them:\n` +
       `${answered}\n\nRe-ask the user ONLY the unresolved question(s):\n${unresolved.join("\n")}`;
 
   process.stdout.write(JSON.stringify({
@@ -288,7 +304,7 @@ async function main() {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
       permissionDecisionReason: reason,
-      systemMessage: `Jev answered: ${resolved.map((r) => r.label).join(", ")}`,
+      systemMessage: `✓ Jev answered for you: ${resolved.map((r) => r.label).join(", ")}`,
     },
   }));
 }

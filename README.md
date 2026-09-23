@@ -58,7 +58,7 @@ asks you exactly as it always has. Nothing to break.
 ## What you'll see
 
 When Jev answers a question for you, it shows up as one line in the
-session — `Jev answered: ...` — and Claude carries on as if you'd typed it.
+session — `✓ Jev answered for you: ...` — and Claude carries on as if you'd typed it.
 Everything else (questions that are your call, or that Jev isn't sure about)
 reaches you exactly as before.
 
@@ -92,6 +92,14 @@ things to judge:
 Only when Jev is both confident *and* sure the question isn't personal does
 Claude get the answer silently and move on. Otherwise the question reaches
 you exactly as if ask-jev weren't installed.
+
+**In [Paseo](#in-paseo) this hook stands down.** Paseo turns `AskUserQuestion`
+into a native question you answer in the app, and a Claude Code hook can only
+"answer" one by denying the tool — which Paseo shows as a red `hook error`
+even though the answer still reaches the model. So inside Paseo (detected via
+`PASEO_AGENT_ID`) the auto-answer hook stays silent and every question reaches
+you normally. Asking Jev directly for judgement calls (below) is CLI-based and
+works everywhere; the stats panel keeps recording.
 
 <details>
 <summary>Options need real definitions, multiSelect, and when it stays silent</summary>

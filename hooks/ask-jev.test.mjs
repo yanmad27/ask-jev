@@ -25,11 +25,15 @@ function stub(handler) {
   });
   return new Promise((r) => server.listen(0, "127.0.0.1", () => r(server)));
 }
-async function runRaw(input, url) {
-  const child = execFileAsync("node", ["hooks/ask-jev.mjs"], {
-    env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile },
-    encoding: "utf8",
-  });
+async function runRaw(input, url, extraEnv = {}) {
+  // Hermetic: a test run that happens to live inside a Paseo agent inherits
+  // PASEO_AGENT_ID, which makes the hook stand down. Scrub it by default so these
+  // tests target Claude Code behavior wherever they run; the Paseo stand-down test
+  // opts back in through extraEnv.
+  const env = { ...process.env };
+  delete env.PASEO_AGENT_ID;
+  Object.assign(env, { AI_GATEWAY_API_KEY: "dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile }, extraEnv);
+  const child = execFileAsync("node", ["hooks/ask-jev.mjs"], { env, encoding: "utf8" });
   child.child.stdin.end(JSON.stringify(input));
   return (await child).stdout;
 }
@@ -37,6 +41,21 @@ async function runHook(input, url) {
   return JSON.parse(await runRaw(input, url));
 }
 const opts = [{ label: "A", description: "a" }, { label: "B", description: "b" }];
+
+test("Paseo: hook stands down entirely when PASEO_AGENT_ID is set, even for a confident answer", async () => {
+  // In Paseo, AskUserQuestion is a native question permission the user answers in the
+  // UI. A Claude Code hook can only "answer" by denying (permissionDecision: "deny"),
+  // which Paseo renders as a red "PreToolUse:AskUserQuestion hook error" block — so the
+  // hook must emit nothing and let the question reach the user normally.
+  const server = await stub(() => ({ pick: { choice: "o0", probabilities: { o0: 0.99 } }, personal: { probability: 0.02 }, destructive: { probability: 0.02 } }));
+  const stdout = await runRaw(
+    { tool_name: "AskUserQuestion", transcript_path: transcript, tool_input: { questions: [{ question: "Stack?", options: opts }] } },
+    `http://127.0.0.1:${server.address().port}`,
+    { PASEO_AGENT_ID: "paseo-agent-1" },
+  );
+  server.close();
+  assert.equal(stdout.trim(), "", "under Paseo the hook must emit no permissionDecision");
+});
 
 test("partial answers: resolved question denies, unresolved re-asked", async () => {
   const server = await stub(({ state, questions }) => (questions.pick
@@ -209,10 +228,10 @@ test("lib/jev.mjs: a hanging gateway response stays within the requested budget"
 // --- Bidirectional mirror reconciliation: personal/destructive must stay conservative under contradiction ---
 
 async function runRawEnv(input, url, extraEnv) {
-  const child = execFileAsync("node", ["hooks/ask-jev.mjs"], {
-    env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile, ...extraEnv },
-    encoding: "utf8",
-  });
+  const env = { ...process.env };
+  delete env.PASEO_AGENT_ID; // hermetic: don't let an ambient Paseo agent make the hook stand down
+  Object.assign(env, { AI_GATEWAY_API_KEY: "dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile }, extraEnv);
+  const child = execFileAsync("node", ["hooks/ask-jev.mjs"], { env, encoding: "utf8" });
   child.child.stdin.end(JSON.stringify(input));
   return (await child).stdout;
 }

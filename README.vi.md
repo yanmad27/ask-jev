@@ -57,7 +57,7 @@ vẫn hỏi bạn y hệt như trước giờ. Không có gì để hỏng cả.
 ## Bạn sẽ thấy gì
 
 Khi Jev trả lời một câu hỏi thay bạn, nó hiện lên như một dòng duy nhất
-trong session — `Jev answered: ...` — rồi Claude tiếp tục làm như thể chính
+trong session — `✓ Jev answered for you: ...` — rồi Claude tiếp tục làm như thể chính
 bạn vừa gõ câu trả lời đó. Mọi thứ khác (câu hỏi thuộc về bạn, hoặc Jev
 không chắc chắn) vẫn tới tay bạn như bình thường.
 
@@ -92,6 +92,14 @@ Trước khi Claude Code hiện câu hỏi cho bạn, ask-jev gửi nó cho Jev 
 Chỉ khi Jev vừa tự tin vừa chắc chắn câu hỏi không mang tính cá nhân, Claude
 mới nhận được đáp án một cách âm thầm và tiếp tục. Ngược lại, câu hỏi vẫn
 tới tay bạn y như khi chưa cài ask-jev.
+
+**Trong [Paseo](#trong-paseo), hook này đứng im.** Paseo biến `AskUserQuestion`
+thành một câu hỏi native mà bạn trả lời ngay trong app, và hook của Claude Code
+chỉ có thể "trả lời" bằng cách deny tool — Paseo hiển thị thành khối lỗi đỏ
+`hook error` dù đáp án của Jev vẫn tới model. Nên trong Paseo (nhận biết qua
+`PASEO_AGENT_ID`) hook tự-trả-lời đứng im: mọi câu hỏi tới tay bạn như bình
+thường. Việc hỏi Jev trực tiếp cho các phán đoán (bên dưới) chạy qua CLI nên
+vẫn hoạt động ở mọi nơi; panel thống kê vẫn ghi nhận.
 
 <details>
 <summary>Option cần định nghĩa thật sự, multiSelect, và khi nào nó im lặng</summary>

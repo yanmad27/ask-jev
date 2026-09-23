@@ -97,7 +97,7 @@ test("ask-jev-answer.mjs: parses real AskUserQuestion tool_response strings, ign
   const logFile = join(mkdtempSync(join(tmpdir(), "ctx-answer-log-")), "jev.log");
   const positive1 = 'Your questions have been answered: "Enforce \\"definition bắt buộc\\" ở đâu?"="Hook enforce + README (Recommended)". You can now continue with these answers in mind.';
   const positive2 = 'The user answered: "Where is the logo file on disk? (...)"="~/Downloads/....jpg". Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say.';
-  const negativeOwnDeny = 'Jev answered on the user\'s behalf from conversation context. Do NOT ask again — use these choices and continue:\n"Which option?" → A (Jev: 0.91)';
+  const negativeOwnDeny = 'Not a real error — Jev already answered this for you from the conversation, so you don\'t have to ask. Use these choices and continue; do not re-ask:\n"Which option?" → A (Jev: 0.91)';
   const negativeCanceled = "Tool permission request failed: ... canceled";
   // "Answer: ..." is an ORCHESTRATOR deny reason (another agent denying the
   // AskUserQuestion permission with a message) — not a real user answer. Confirmed by
