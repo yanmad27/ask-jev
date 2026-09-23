@@ -453,11 +453,15 @@ github:yanmad27/ask-jev:paseo-plugin
    /plugin marketplace update ask-jev
    ```
 
-2. Update the plugin:
+2. Update the plugin — in a terminal, **not** inside a Claude Code session:
 
+   ```bash
+   claude plugin update ask-jev@ask-jev
    ```
-   /plugin update ask-jev@ask-jev
-   ```
+
+   (There is no `/plugin update` slash command; inside a session `/plugin
+   marketplace update` only refreshes the catalog. Auto-update also picks up
+   new versions in the background if it's enabled for the marketplace.)
 
 The key file was renamed `jev-ask.key` → `ask-jev.key`; the old name is still
 read as a fallback, so there's nothing to migrate. Restart Claude Code after
