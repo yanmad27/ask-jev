@@ -128,13 +128,13 @@ test("lib/stats.mjs: computeStats reports per-gate positive/fallback rates", () 
   assert.equal(s.decisions.fallback_pct, (2 / 6) * 100);
 });
 
-test("lib/jev.mjs: askJev retries once on a 5xx gateway response, logs retried:true", async () => {
+test("lib/jev.mjs: askJev retries 5xx until success within budget, logs retried + attempts", async () => {
   let calls = 0;
   const server = createServer((req, res) => {
     req.on("data", () => {});
     req.on("end", () => {
       calls++;
-      if (calls === 1) {
+      if (calls <= 3) {
         res.writeHead(503, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: { message: "Service temporarily unavailable" } }));
       } else {
@@ -146,20 +146,45 @@ test("lib/jev.mjs: askJev retries once on a 5xx gateway response, logs retried:t
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const url = `http://127.0.0.1:${server.address().port}`;
   const script = "import('./lib/jev.mjs').then(async ({askJev}) => { "
-    + "const a = await askJev('dummy', {x:1}, {ok:{type:'boolean',instructions:{question:'q',focus:'f'},criteria:{true:'t',false:'f'}}}, 'test', 2000); "
+    + "const a = await askJev('dummy', {x:1}, {ok:{type:'boolean',instructions:{question:'q',focus:'f'},criteria:{true:'t',false:'f'}}}, 'test', 8000); "
     + "process.stdout.write(JSON.stringify(a)); });";
   const { stdout } = await execFileAsync("node", ["-e", script], {
     env: { ...process.env, ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile },
     encoding: "utf8",
   });
   server.close();
-  assert.equal(calls, 2);
+  assert.equal(calls, 4);
   assert.deepEqual(JSON.parse(stdout), { ok: { probability: 0.5 } });
 
   const call = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l))
     .filter((e) => e.kind === "call" && e.source === "test").at(-1);
   assert.equal(call.status, "ok");
   assert.equal(call.retried, true);
+  assert.equal(call.attempts, 4);
+});
+
+test("lib/jev.mjs: a gateway that always 503s gives up within budget, with backoff capping the attempts", async () => {
+  let calls = 0;
+  const server = createServer((req, res) => {
+    req.on("data", () => {});
+    req.on("end", () => {
+      calls++;
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { message: "Service temporarily unavailable" } }));
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const script = "import('./lib/jev.mjs').then(async ({askJev}) => { const t = Date.now(); "
+    + "await askJev('dummy', {x:1}, {ok:{type:'boolean',instructions:{question:'q'},criteria:{true:'t',false:'f'}}}, 'test-503', 4000).catch(() => {}); "
+    + "process.stdout.write(String(Date.now() - t)); });";
+  const { stdout } = await execFileAsync("node", ["-e", script], {
+    env: { ...process.env, ASK_JEV_GATEWAY_URL: `http://127.0.0.1:${server.address().port}`, ASK_JEV_LOG_FILE: logFile },
+    encoding: "utf8",
+  });
+  server.close();
+  assert.ok(Number(stdout) <= 4000, `took ${stdout}ms`);
+  // backoff 300 → 600 → 1200 chặn ở tối đa 4 attempt (backoff cố định 300ms sẽ ra ~8); máy bận → có thể 2–3.
+  assert.ok(calls >= 2 && calls <= 4, `calls=${calls}`);
 });
 
 test("lib/jev.mjs: a hanging gateway response stays within the requested budget", async () => {
