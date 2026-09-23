@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/yanmad27/ask-jev/compare/v1.2.0...v1.2.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **jev:** state the request shape in hints and validate it in the CLI ([#32](https://github.com/yanmad27/ask-jev/issues/32)) ([936ab58](https://github.com/yanmad27/ask-jev/commit/936ab584ba470241b9c918c91a718f81435022e3))
+
 ## [1.2.0](https://github.com/yanmad27/ask-jev/compare/v1.1.0...v1.2.0) (2026-09-23)
 
 

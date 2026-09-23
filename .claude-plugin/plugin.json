@@ -1,5 +1,5 @@
 {
   "name": "ask-jev",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Ask Jev before asking you. Intercepts AskUserQuestion and answers it from conversation context when the answer is determinable — and stays out of the way when the choice is yours."
 }
