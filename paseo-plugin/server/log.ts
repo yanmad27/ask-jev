@@ -1,8 +1,9 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { RpcInput } from "@getpaseo/plugin";
-import { computeStats, filterSince, parseEvents, recentDecisions, sinceMsFromSpec } from "../shared/stats.mjs";
+import { computeStats, filterRepo, filterSince, normalizeRepo, parseEvents, recentDecisions, sinceMsFromSpec } from "../shared/stats.mjs";
 import type { JevStats } from "../shared/contracts";
 import { jevDecisionRpc, jevStatsRpc } from "../shared/contracts";
 
@@ -62,9 +63,28 @@ function logPath(): string {
   return process.env.ASK_JEV_LOG_FILE || process.env.JEV_LOG_FILE || join(homedir(), ".claude", "ask-jev.log");
 }
 
-function emptyStats(path: string): JevStats {
+// ponytail: remote cached per cwd for the server's lifetime — `paseo plugin reload ask-jev` after changing a remote.
+const remotes = new Map<string, string | null>();
+
+function remoteOf(cwd: string): string | null {
+  let url = remotes.get(cwd);
+  if (url === undefined) {
+    try {
+      url = execFileSync("git", ["-C", cwd, "config", "--get", "remote.origin.url"], { timeout: 1000, stdio: ["ignore", "pipe", "ignore"] })
+        .toString()
+        .trim() || null;
+    } catch {
+      url = null;
+    }
+    remotes.set(cwd, url);
+  }
+  return url;
+}
+
+function emptyStats(path: string, scope: string): JevStats {
   return {
     logPath: path,
+    scope,
     hasLog: false,
     calls: { total: 0, ok: 0, error: 0, avg_latency_ms: 0, p95_latency_ms: 0 },
     decisions: { total: 0, by_outcome: {}, by_gate: {}, positive_pct: 0, fallback_pct: 0 },
@@ -73,12 +93,16 @@ function emptyStats(path: string): JevStats {
   };
 }
 
-export function getStats({ since, outcome, gate }: RpcInput<typeof jevStatsRpc>): JevStats {
+/** Scoped to the workspace's git remote; no cwd (workspace not resolved) → every repo. */
+export function getStats({ since, outcome, gate, cwd }: RpcInput<typeof jevStatsRpc>): JevStats {
   const path = logPath();
+  const remote = cwd === undefined ? undefined : remoteOf(cwd);
+  const scope = cwd === undefined ? "all repos" : (normalizeRepo(remote) ?? "no git remote");
   const allEvents = loadEvents(path);
-  if (!allEvents) return emptyStats(path);
+  if (!allEvents) return emptyStats(path, scope);
 
-  const events = filterSince(allEvents, sinceMsFromSpec(since));
+  let events = filterSince(allEvents, sinceMsFromSpec(since));
+  if (cwd !== undefined) events = filterRepo(events, remote);
   const summary = computeStats(events) as StatsSummary;
 
   // Filter by gate/outcome before capping, so a rare one isn't crowded out by the 200-row cap.
@@ -89,6 +113,7 @@ export function getStats({ since, outcome, gate }: RpcInput<typeof jevStatsRpc>)
 
   return {
     logPath: path,
+    scope,
     hasLog: true,
     calls: summary.calls,
     decisions: summary.decisions,

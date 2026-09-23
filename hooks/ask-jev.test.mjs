@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { writeFileSync, readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseEvents, filterSince, sinceMsFromSpec, recentDecisions, computeStats } from "../lib/stats.mjs";
+import { parseEvents, filterSince, filterRepo, normalizeRepo, sinceMsFromSpec, recentDecisions, computeStats } from "../lib/stats.mjs";
 import { requestError } from "../lib/jev.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -259,4 +259,14 @@ test("requestError: rejects shapes agents invent, accepts documented ones", () =
   const skill = readFileSync("skills/ask-jev/SKILL.md", "utf8").match(/```json\n([\s\S]*?)```/)[1];
   assert.equal(requestError(JSON.parse(skill)), null, "SKILL.md example must stay valid");
   assert.equal(requestError(JSON.parse(readFileSync("evals/fixtures/classify-ticket.json", "utf8"))), null);
+});
+
+test("filterRepo: same repo matches across ssh/https/credentials; other repos and repo-less lines drop out", () => {
+  for (const url of ["git@github.com:yanmad27/ask-jev.git", "https://github.com/yanmad27/ask-jev", "https://u:tok@GitHub.com/yanmad27/ask-jev.git/", "ssh://git@github.com/yanmad27/ask-jev.git"]) {
+    assert.equal(normalizeRepo(url), "github.com/yanmad27/ask-jev", url);
+  }
+  assert.equal(normalizeRepo(undefined), null);
+  const events = [{ repo: "git@github.com:yanmad27/ask-jev.git" }, { repo: "https://github.com/yanmad27/ask-jev" }, { repo: "git@github.com:tini-works/kiosk-app.git" }, {}];
+  assert.equal(filterRepo(events, "https://github.com/yanmad27/ask-jev.git").length, 2);
+  assert.deepEqual(filterRepo(events, null), [{}]);
 });

@@ -1,6 +1,6 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import type { PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
-import { useRpc } from "@getpaseo/plugin/client";
+import { useRpc, useWorkspace } from "@getpaseo/plugin/client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FlatList, Pressable, Text, View } from "react-native";
 import { GATES, jevDecisionRpc, jevStatsRpc, SINCE_OPTIONS, type JevStats, type SinceOption } from "../shared/contracts";
@@ -36,9 +36,11 @@ function formatFieldValue(value: unknown): string {
   return String(value);
 }
 
-export function AskJevPanel({ theme, layout }: PluginWorkspacePanelProps) {
+export function AskJevPanel({ theme, layout, workspaceId }: PluginWorkspacePanelProps) {
+  const cwd = useWorkspace(workspaceId, (w) => w.directory) ?? undefined;
   const fetchStats = useRpc(jevStatsRpc);
   const fetchDecision = useRpc(jevDecisionRpc);
+  const [allRepos, setAllRepos] = useState(false);
   const [since, setSince] = useState<SinceOption>("all");
   const [outcome, setOutcome] = useState("all");
   const [gate, setGate] = useState("all");
@@ -50,8 +52,8 @@ export function AskJevPanel({ theme, layout }: PluginWorkspacePanelProps) {
   const mono = monospace(layout.platform);
 
   const load = useCallback(() => {
-    fetchStats({ since, outcome, gate }).then(setStats).catch(() => {});
-  }, [fetchStats, since, outcome, gate]);
+    fetchStats({ since, outcome, gate, cwd: allRepos ? undefined : cwd }).then(setStats).catch(() => {});
+  }, [fetchStats, since, outcome, gate, cwd, allRepos]);
 
   useEffect(() => {
     load();
@@ -102,6 +104,11 @@ export function AskJevPanel({ theme, layout }: PluginWorkspacePanelProps) {
 
   return (
     <View style={styles.screen}>
+      <View style={styles.row}>
+        <Chip styles={styles} active={!allRepos} label="This repo" onPress={() => setAllRepos(false)} />
+        <Chip styles={styles} active={allRepos} label="All repos" onPress={() => setAllRepos(true)} />
+        <Text style={[styles.muted, { alignSelf: "center" }]}>{stats.scope}</Text>
+      </View>
       <View style={styles.tiles}>
         <Tile styles={styles} label="Calls" value={String(stats.calls.total)} />
         <Tile styles={styles} label="Jev decided" value={`${stats.decisions.positive_pct.toFixed(0)}%`} />
@@ -322,7 +329,7 @@ function makeStyles(theme: PluginTheme, compact: boolean) {
       gap: 16,
     },
     detailLeft: { flex: 3, minWidth: 220, gap: 8 },
-    detailRight: { width: compact ? 180 : 220, gap: 8 },
+    detailRight: { flex: 1, minWidth: compact ? 220 : 280, gap: 8 },
     detailRow: { gap: 2 },
     detailLabel: { fontSize: 11, color: theme.colors.foregroundMuted, textTransform: "uppercase" as const },
     detailValue: { fontSize: 13, color: theme.colors.foreground, flexWrap: "wrap" as const },

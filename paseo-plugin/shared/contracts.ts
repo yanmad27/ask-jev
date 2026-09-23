@@ -30,9 +30,11 @@ export const jevStatsRpc = defineRpc({
     since: z.enum(SINCE_OPTIONS).default("all"),
     outcome: z.string().default("all"),
     gate: z.string().default("all"),
+    cwd: z.string().optional(),
   }),
   output: z.object({
     logPath: z.string(),
+    scope: z.string(),
     hasLog: z.boolean(),
     calls: z.object({
       total: z.number(),

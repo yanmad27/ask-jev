@@ -30,6 +30,19 @@ export function filterSince(events, sinceMs) {
   return sinceMs ? events.filter((e) => Date.now() - new Date(e.ts).getTime() <= sinceMs) : events;
 }
 
+/** Cùng một repo có thể được log dạng ssh, https hay kèm user@ — quy về "host/owner/repo" để so khớp. */
+export function normalizeRepo(url) {
+  const m = String(url ?? "").trim().replace(/\/+$/, "").replace(/\.git$/, "")
+    .match(/^(?:[a-z][a-z+.-]*:\/\/)?(?:[^@/]+@)?([^/:]+)[:/](.+)$/i);
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
+}
+
+/** Chỉ giữ event của repo `url`; url rỗng/null → chỉ event không có repo (thư mục không có git remote). */
+export function filterRepo(events, url) {
+  const want = normalizeRepo(url);
+  return events.filter((e) => normalizeRepo(e.repo) === want);
+}
+
 /** Outcome nào đếm là "Jev quyết được" cho từng gate — điều chỉnh nếu đổi tên outcome. */
 export const POSITIVE = {
   ask: ["answered"],
