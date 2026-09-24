@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/yanmad27/ask-jev/compare/v1.3.0...v1.3.1) (2026-09-23)
+
+
+### Bug Fixes
+
+* **jev:** stand down the AskUserQuestion hook under Paseo ([#37](https://github.com/yanmad27/ask-jev/issues/37)) ([66f83d2](https://github.com/yanmad27/ask-jev/commit/66f83d2b911105662062dc35670947e1ea02d636))
+
 ## [1.3.0](https://github.com/yanmad27/ask-jev/compare/v1.2.1...v1.3.0) (2026-09-23)
 
 
