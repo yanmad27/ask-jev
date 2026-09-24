@@ -43,14 +43,17 @@ Questions that are genuinely yours to answer still reach you, unchanged.
    /plugin install ask-jev@ask-jev
    ```
 
-3. Give it a Vercel AI Gateway key (Jev lives in Vercel's model catalogue):
+3. Get a key at [console.typesafe.ai/keys](https://console.typesafe.ai/keys)
+   and set it as `TYPESAFE_API_KEY` — or put it in a file:
 
    ```bash
-   echo 'vck_...' > ~/.claude/ask-jev.key && chmod 600 ~/.claude/ask-jev.key
+   echo '<your key>' > ~/.claude/ask-jev.key && chmod 600 ~/.claude/ask-jev.key
    ```
 
-   Already have a gateway key lying around? Set the `AI_GATEWAY_API_KEY`
-   environment variable instead — no file needed.
+   **Legacy Vercel AI Gateway:** existing `vck_...` keys keep working — they
+   are auto-detected and routed through the gateway. Force a provider with
+   `ASK_JEV_PROVIDER=typesafe|vercel`. Reading the key from
+   `AI_GATEWAY_API_KEY` is deprecated; prefer `TYPESAFE_API_KEY`.
 
 That's it. **No key set →** the plugin quietly does nothing and Claude Code
 asks you exactly as it always has. Nothing to break.
@@ -289,10 +292,10 @@ Every field is either the user's own words (messages), their own files
 logs every real answer). A static test enforces this: no gate is allowed to
 build a `preferences`/`user_*` field from a string literal.
 
-The whole thing is capped at `ASK_JEV_STATE_CHARS` (default `100000` — a real
-~33k-character state measured ~1.8s round-trip and a real 90k-character
-state still got a clean 200; the gateway documents no limit, so this is a
-self-imposed ceiling with margin, not a measured wall). The cap is enforced
+The whole thing is capped at `ASK_JEV_STATE_CHARS` (default `70000` — a real
+~33k-character state measured ~1.8s round-trip; api.typesafe.ai caps `state`
+at 32k tokens, and dense log-like text of 80k characters passed while 90k
+was rejected with `max_tokens_exceeded`, so 70k leaves margin). The cap is enforced
 on the actual serialized `JSON.stringify(state).length` as sections are
 added in priority order, not a sum of each section's own internal size —
 a section that doesn't fit is truncated (head kept, marked
@@ -308,7 +311,7 @@ less context. Every call logs the size in characters of each section as
 `state_sizes` — never the content — so the budget can be tuned from
 `bin/jev.mjs stats` without exposing anything.
 
-Same fail-open rules as everywhere else: no API key, a gateway error, or a
+Same fail-open rules as everywhere else: no API key, an API error, or a
 timeout means the gate is silent — never a blocker.
 
 </details>
@@ -358,16 +361,18 @@ All optional — sensible defaults out of the box.
 
 | Variable | Default | |
 |---|---|---|
-| `AI_GATEWAY_API_KEY` | reads `~/.claude/ask-jev.key` | your Vercel AI Gateway key |
-| `ASK_JEV_API_KEY` | — | alias for `AI_GATEWAY_API_KEY`, checked first |
+| `TYPESAFE_API_KEY` | reads `~/.claude/ask-jev.key` | your key from [console.typesafe.ai/keys](https://console.typesafe.ai/keys) |
+| `ASK_JEV_API_KEY` | — | overrides every other key variable, checked first |
+| `AI_GATEWAY_API_KEY` | — | deprecated: legacy Vercel AI Gateway key, only a fallback |
+| `ASK_JEV_PROVIDER` | inferred from the key | `typesafe` or `vercel`; a `vck_` key infers `vercel`, anything else `typesafe` |
 | `ASK_JEV_ASK_THRESHOLD` | `0.8` | lower it to let Jev answer more often (and be wrong more often) |
 | `ASK_JEV_REMIND` | (on) | set to `0` to stop the per-turn "ask Jev" reminder |
 | `ASK_JEV_GATES` | `permission,stop,bash,prompt` | comma list of enabled [automatic gates](#3-automatic-gates); empty disables all |
-| `ASK_JEV_STATE_CHARS` | `100000` | max characters of context sent to Jev per gate call — lower for faster/cheaper gates |
+| `ASK_JEV_STATE_CHARS` | `70000` | max characters of context sent to Jev per gate call — lower for faster/cheaper gates |
 | `ASK_JEV_AUTONOMY` | `full` | [autonomy mode](#4-autonomy); set to `safe` to only ever auto-answer, never proceed on its own |
 | `ASK_JEV_ALLOW_THRESHOLD` | `0.8` full / `0.9` safe | `permission` gate's auto-allow threshold |
-| `ASK_JEV_MODEL` | `typesafe-ai/jev` | which model Jev evaluation runs against |
-| `ASK_JEV_GATEWAY_URL` | Vercel's evaluation endpoint | only needed for a custom gateway |
+| `ASK_JEV_MODEL` | `jev-latest` (`typesafe-ai/jev` on `vercel`) | which model Jev evaluation runs against |
+| `ASK_JEV_API_URL` | `https://api.typesafe.ai/v1/systemone` (Vercel's endpoint on `vercel`) | only needed for a custom endpoint; `ASK_JEV_GATEWAY_URL` is still read as an alias |
 
 `JEV_*` names still work but are deprecated.
 
@@ -377,7 +382,7 @@ under the old name.
 
 ## Usage analytics
 
-Every gateway call and every hook decision is appended as one JSON line to
+Every API call and every hook decision is appended as one JSON line to
 `~/.claude/ask-jev.log` (override the path with `ASK_JEV_LOG_FILE`, disable
 entirely with `ASK_JEV_LOG=0`). Each decision line carries which `gate` produced
 it (`ask`, `permission`, `stop`, `bash`, `prompt`), Jev's answer as a
@@ -509,8 +514,8 @@ cleanly without one — it never gates pull request CI.
 
 <br>
 
-**No npm dependencies.** Just Node's `fetch` and `fs`, calling the gateway's
-evaluation endpoint directly. Clone it and it runs — no `npm install`, no
+**No npm dependencies.** Just Node's `fetch` and `fs`, calling the
+Jev API directly. Clone it and it runs — no `npm install`, no
 `node_modules`.
 
 **Answering "on your behalf" is really a denial.** Claude Code gives hooks no
@@ -528,7 +533,7 @@ runs on every `SessionStart` and writes the `PreToolUse` entry directly into
 your `~/.claude/settings.json`, where hooks are known to work — and keeps the
 path current across plugin updates. It only ever touches its own entry and
 leaves the rest of your `settings.json` alone. Once upstream fixes that bug,
-this becomes a harmless duplicate — worst case, one extra gateway call.
+this becomes a harmless duplicate — worst case, one extra API call.
 
 **Context** comes from the last 12 turns of the session transcript (subagent
 and machine-generated turns dropped), trimmed to 6000 characters. Each

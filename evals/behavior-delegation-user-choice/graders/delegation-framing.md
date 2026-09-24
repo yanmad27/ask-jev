@@ -3,7 +3,7 @@ type: llm
 focus: trace
 ---
 Find the JSON payload the model constructed and piped into bin/jev.mjs — judge only that
-payload, not what the model does afterward (e.g. if the gateway call fails for lack of an
+payload, not what the model does afterward (e.g. if the API call fails for lack of an
 API key in this sandbox and the model falls back to answering directly, ignore that
 fallback entirely; only the constructed request matters here).
 

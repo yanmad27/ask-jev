@@ -42,14 +42,16 @@ Câu nào thật sự thuộc về bạn thì vẫn tới tay bạn, y như cũ.
    /plugin install ask-jev@ask-jev
    ```
 
-3. Cấp cho nó một Vercel AI Gateway key (Jev nằm trong danh mục model của Vercel):
+3. Lấy key tại [console.typesafe.ai/keys](https://console.typesafe.ai/keys)
+   và đặt vào biến môi trường `TYPESAFE_API_KEY` — hoặc ghi vào file:
 
    ```bash
-   echo 'vck_...' > ~/.claude/ask-jev.key && chmod 600 ~/.claude/ask-jev.key
+   echo '<key của bạn>' > ~/.claude/ask-jev.key && chmod 600 ~/.claude/ask-jev.key
    ```
 
-   Đã có sẵn gateway key? Đặt biến môi trường `AI_GATEWAY_API_KEY` thay vào —
-   không cần tạo file.
+   **Vercel AI Gateway (legacy):** key `vck_...` cũ vẫn chạy — được tự nhận
+   diện và đi qua gateway. Ép provider bằng `ASK_JEV_PROVIDER=typesafe|vercel`.
+   Đọc key từ `AI_GATEWAY_API_KEY` đã deprecated; hãy dùng `TYPESAFE_API_KEY`.
 
 Vậy là xong. **Chưa đặt key →** plugin lặng lẽ không làm gì và Claude Code
 vẫn hỏi bạn y hệt như trước giờ. Không có gì để hỏng cả.
@@ -290,10 +292,10 @@ chính họ (CLAUDE.md, MEMORY.md), hoặc bản ghi những gì họ thật s�
 lại mọi câu trả lời thật). Một test tĩnh áp đặt điều này: không gate nào
 được phép dựng field `preferences`/`user_*` từ một chuỗi literal.
 
-Toàn bộ bị giới hạn ở `ASK_JEV_STATE_CHARS` (mặc định `100000` — một state
-thật ~33k ký tự đo được round-trip ~1.8s và một state thật 90k ký tự vẫn
-nhận 200 sạch; gateway không công bố giới hạn nào, nên đây là trần tự đặt
-có biên độ dư, không phải một bức tường đã đo). Giới hạn được áp trên độ
+Toàn bộ bị giới hạn ở `ASK_JEV_STATE_CHARS` (mặc định `70000` — một state
+thật ~33k ký tự đo được round-trip ~1.8s; api.typesafe.ai giới hạn `state`
+32k token, text dày kiểu log 80k ký tự vẫn qua còn 90k bị từ chối với
+`max_tokens_exceeded`, nên 70k là mức có biên độ dư). Giới hạn được áp trên độ
 dài `JSON.stringify(state).length` thật sự khi các phần được thêm vào theo
 thứ tự ưu tiên, không phải tổng kích thước nội bộ của từng phần — một phần
 không vừa sẽ bị cắt (giữ phần đầu, đánh dấu `…[truncated]`) hoặc bỏ hẳn nếu
@@ -309,7 +311,7 @@ ngữ cảnh hơn. Mỗi lời gọi ghi log kích thước theo ký tự của 
 dạng `state_sizes` — không bao giờ ghi nội dung — để ngân sách có thể tinh
 chỉnh từ `bin/jev.mjs stats` mà không lộ gì cả.
 
-Cùng nguyên tắc fail-open như mọi nơi khác: không có API key, gateway lỗi,
+Cùng nguyên tắc fail-open như mọi nơi khác: không có API key, API lỗi,
 hoặc timeout đều khiến gate im lặng — không bao giờ là một điểm chặn.
 
 </details>
@@ -359,16 +361,18 @@ Tất cả đều tuỳ chọn — mặc định đã hợp lý sẵn.
 
 | Biến | Mặc định | |
 |---|---|---|
-| `AI_GATEWAY_API_KEY` | đọc `~/.claude/ask-jev.key` | Vercel AI Gateway key của bạn |
-| `ASK_JEV_API_KEY` | — | alias cho `AI_GATEWAY_API_KEY`, được kiểm tra trước |
+| `TYPESAFE_API_KEY` | đọc `~/.claude/ask-jev.key` | key của bạn từ [console.typesafe.ai/keys](https://console.typesafe.ai/keys) |
+| `ASK_JEV_API_KEY` | — | ghi đè mọi biến key khác, được kiểm tra trước |
+| `AI_GATEWAY_API_KEY` | — | deprecated: Vercel AI Gateway key cũ, chỉ là fallback |
+| `ASK_JEV_PROVIDER` | suy từ key | `typesafe` hoặc `vercel`; key `vck_` suy ra `vercel`, còn lại `typesafe` |
 | `ASK_JEV_ASK_THRESHOLD` | `0.8` | hạ xuống để Jev tự trả lời nhiều hơn (và sai nhiều hơn) |
 | `ASK_JEV_REMIND` | (bật) | đặt `0` để tắt lời nhắc "ask Jev" mỗi lượt |
 | `ASK_JEV_GATES` | `permission,stop,bash,prompt` | danh sách các [gate tự động](#3-các-gate-tự-động) đang bật, phân tách bởi dấu phẩy; để trống tắt cả bốn |
-| `ASK_JEV_STATE_CHARS` | `100000` | số ký tự ngữ cảnh tối đa gửi cho Jev mỗi lần gọi gate — giảm xuống để gate nhanh/rẻ hơn |
+| `ASK_JEV_STATE_CHARS` | `70000` | số ký tự ngữ cảnh tối đa gửi cho Jev mỗi lần gọi gate — giảm xuống để gate nhanh/rẻ hơn |
 | `ASK_JEV_AUTONOMY` | `full` | [chế độ autonomy](#4-autonomy); đặt `safe` để chỉ tự trả lời, không bao giờ tự tiến hành |
 | `ASK_JEV_ALLOW_THRESHOLD` | `0.8` full / `0.9` safe | ngưỡng tự cho phép của gate `permission` |
-| `ASK_JEV_MODEL` | `typesafe-ai/jev` | model nào chạy đánh giá cho Jev |
-| `ASK_JEV_GATEWAY_URL` | endpoint đánh giá của Vercel | chỉ cần khi dùng gateway riêng |
+| `ASK_JEV_MODEL` | `jev-latest` (`typesafe-ai/jev` khi dùng `vercel`) | model nào chạy đánh giá cho Jev |
+| `ASK_JEV_API_URL` | `https://api.typesafe.ai/v1/systemone` (endpoint của Vercel khi dùng `vercel`) | chỉ cần khi dùng endpoint riêng; `ASK_JEV_GATEWAY_URL` vẫn được đọc như alias |
 
 Các tên `JEV_*` vẫn hoạt động nhưng đã deprecated.
 
@@ -378,7 +382,7 @@ cũ.
 
 ## Usage analytics
 
-Mỗi lời gọi gateway và mỗi quyết định của hook được ghi thêm một dòng JSON
+Mỗi lời gọi API và mỗi quyết định của hook được ghi thêm một dòng JSON
 vào `~/.claude/ask-jev.log` (đổi đường dẫn bằng `ASK_JEV_LOG_FILE`, tắt hẳn
 bằng `ASK_JEV_LOG=0`). Mỗi dòng quyết định mang theo `gate` nào tạo ra nó
 (`ask`, `permission`, `stop`, `bash`, `prompt`), đáp án của Jev dưới dạng
@@ -512,7 +516,7 @@ request.
 <br>
 
 **Không có dependency npm nào.** Chỉ dùng `fetch` và `fs` của Node, gọi
-thẳng endpoint đánh giá của gateway. Clone về là chạy được — không cần
+thẳng API của Jev. Clone về là chạy được — không cần
 `npm install`, không `node_modules`.
 
 **"Trả lời thay bạn" thật ra là một lần từ chối.** Claude Code không cho
@@ -531,7 +535,7 @@ chạy ở mỗi `SessionStart` và ghi thẳng entry `PreToolUse` vào
 thời giữ đường dẫn luôn cập nhật qua các lần nâng cấp plugin. Nó chỉ đụng
 vào đúng entry của chính nó và để yên phần còn lại của `settings.json`.
 Một khi upstream sửa lỗi đó, đây trở thành một bản trùng vô hại — tệ nhất
-là tốn thêm một lời gọi gateway.
+là tốn thêm một lời gọi API.
 
 **Context** lấy từ 12 lượt gần nhất của session transcript (lượt của
 subagent và lượt do máy sinh ra bị bỏ), cắt còn 6000 ký tự. Mỗi câu hỏi tốn

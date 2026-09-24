@@ -2,7 +2,7 @@
 # Exercises hooks/ask-jev.mjs the same way Claude Code's PreToolUse does:
 # pipe a synthetic AskUserQuestion payload into it on stdin, read stdout.
 #
-# One deterministic check (no gateway call) + three live checks (real Jev
+# One deterministic check (no API call) + three live checks (real Jev
 # call, ~$0.00003 each). Live checks print the observed outcome instead of
 # hard asserting — Jev's confidence is a probability, not a fixed value.
 # As of v0.2.0, multiSelect is judged per-option (decideMulti), not bypassed.
@@ -28,14 +28,14 @@ check() {
 
 echo "== preflight =="
 
-if [ -n "${AI_GATEWAY_API_KEY:-}" ]; then
-  echo "PASS  gateway key — AI_GATEWAY_API_KEY set"
+if [ -n "${TYPESAFE_API_KEY:-}${AI_GATEWAY_API_KEY:-}" ]; then
+  echo "PASS  API key — env var set"
   pass=$((pass + 1))
 elif [ -s "$HOME/.claude/ask-jev.key" ] || [ -s "$HOME/.claude/jev-ask.key" ]; then
-  echo "PASS  gateway key — key file present"
+  echo "PASS  API key — key file present"
   pass=$((pass + 1))
 else
-  echo "FAIL  gateway key — no AI_GATEWAY_API_KEY and no ~/.claude/{ask-jev,jev-ask}.key"
+  echo "FAIL  API key — no TYPESAFE_API_KEY and no ~/.claude/{ask-jev,jev-ask}.key"
   fail=$((fail + 1))
 fi
 
@@ -65,7 +65,7 @@ EOF
 }
 
 echo
-echo "== deterministic (no gateway call) =="
+echo "== deterministic (no API call) =="
 
 # missing option description always bounces back with a fixed deny message
 t2="$TMP/t2.jsonl"; : > "$t2"
@@ -77,7 +77,7 @@ fi
 check "missing description bounced back to Claude" "$out" 'deny + "needs a description"' "$ok"
 
 echo
-echo "== live gateway calls (real Jev, ~\$0.00003 each) =="
+echo "== live API calls (real Jev, ~\$0.00003 each) =="
 
 t0="$TMP/t0.jsonl"
 cat > "$t0" <<'EOF'

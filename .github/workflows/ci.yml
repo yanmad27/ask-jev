@@ -25,22 +25,22 @@ jobs:
 
       - name: Hook contract - missing description denies
         run: |
-          out=$(echo '{"tool_name":"AskUserQuestion","transcript_path":"/dev/null","tool_input":{"questions":[{"question":"Q?","options":[{"label":"A"},{"label":"B","description":"b"}]}]}}' | AI_GATEWAY_API_KEY=dummy node hooks/ask-jev.mjs)
+          out=$(echo '{"tool_name":"AskUserQuestion","transcript_path":"/dev/null","tool_input":{"questions":[{"question":"Q?","options":[{"label":"A"},{"label":"B","description":"b"}]}]}}' | TYPESAFE_API_KEY=dummy node hooks/ask-jev.mjs)
           echo "$out" | grep -q '"permissionDecision":"deny"'
 
       - name: Hook contract - resolved context stays silent
         run: |
-          out=$(echo '{"tool_name":"AskUserQuestion","transcript_path":"/dev/null","tool_input":{"questions":[{"question":"Q?","options":[{"label":"A","description":"a"},{"label":"B","description":"b"}]}]}}' | AI_GATEWAY_API_KEY=dummy node hooks/ask-jev.mjs)
+          out=$(echo '{"tool_name":"AskUserQuestion","transcript_path":"/dev/null","tool_input":{"questions":[{"question":"Q?","options":[{"label":"A","description":"a"},{"label":"B","description":"b"}]}]}}' | TYPESAFE_API_KEY=dummy node hooks/ask-jev.mjs)
           [ -z "$out" ]
 
       - name: SessionStart rule - with key
         run: |
-          out=$(echo '{}' | AI_GATEWAY_API_KEY=dummy node hooks/session-start.mjs)
+          out=$(echo '{}' | TYPESAFE_API_KEY=dummy node hooks/session-start.mjs)
           echo "$out" | grep -q additionalContext
 
       - name: SessionStart rule - without key
         run: |
-          out=$(echo '{}' | env -u AI_GATEWAY_API_KEY HOME=/tmp/nohome node hooks/session-start.mjs)
+          out=$(echo '{}' | env -u TYPESAFE_API_KEY -u AI_GATEWAY_API_KEY HOME=/tmp/nohome node hooks/session-start.mjs)
           [ -z "$out" ]
 
   paseo-plugin:

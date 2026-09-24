@@ -1,3 +1,4 @@
+import { cleanEnv } from "./testenv.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -44,7 +45,7 @@ async function runGateFull(name, input, url, gates = name, cwd, mode = "safe") {
   const script = fileURLToPath(new URL(`gates/${name}.mjs`, import.meta.url));
   const child = execFileAsync("node", [script], {
     cwd,
-    env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile, ASK_JEV_GATES: gates, ASK_JEV_REMIND: "0", ASK_JEV_AUTONOMY: mode },
+    env: { ...cleanEnv(), ASK_JEV_API_KEY: "vck_dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile, ASK_JEV_GATES: gates, ASK_JEV_REMIND: "0", ASK_JEV_AUTONOMY: mode },
     encoding: "utf8",
   });
   child.child.stdin.end(JSON.stringify(input));
@@ -181,7 +182,7 @@ test("legacy JEV_GATES= alone still disables gates; ASK_JEV_GATES wins when both
 
   async function runWithEnv(extraEnv) {
     const child = execFileAsync("node", [script], {
-      env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile, ASK_JEV_REMIND: "0", ...extraEnv },
+      env: { ...cleanEnv(), ASK_JEV_API_KEY: "vck_dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile, ASK_JEV_REMIND: "0", ...extraEnv },
       encoding: "utf8",
     });
     child.child.stdin.end(JSON.stringify(editInput));

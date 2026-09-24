@@ -1,3 +1,4 @@
+import { cleanEnv } from "./testenv.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -7,7 +8,7 @@ import { writeFileSync, readFileSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseEvents, filterSince, filterRepo, normalizeRepo, sinceMsFromSpec, recentDecisions, computeStats } from "../lib/stats.mjs";
-import { requestError } from "../lib/jev.mjs";
+import { requestError, provider, endpoint } from "../lib/jev.mjs";
 
 const execFileAsync = promisify(execFile);
 const transcript = join(mkdtempSync(join(tmpdir(), "askjev-")), "t.jsonl");
@@ -27,7 +28,7 @@ function stub(handler) {
 }
 async function runRaw(input, url) {
   const child = execFileAsync("node", ["hooks/ask-jev.mjs"], {
-    env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile },
+    env: { ...cleanEnv(), ASK_JEV_API_KEY: "vck_dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile },
     encoding: "utf8",
   });
   child.child.stdin.end(JSON.stringify(input));
@@ -57,7 +58,7 @@ test("partial answers: resolved question denies, unresolved re-asked", async () 
   assert.ok(decisions.some((d) => d.question === "Resolved?" && d.outcome === "answered" && d.label === "A"));
   assert.ok(decisions.some((d) => d.question === "Unresolved?" && d.outcome === "low_confidence"));
 
-  const { stdout } = await execFileAsync("node", ["bin/jev.mjs", "stats", "--json"], { env: { ...process.env, ASK_JEV_LOG_FILE: logFile } });
+  const { stdout } = await execFileAsync("node", ["bin/jev.mjs", "stats", "--json"], { env: { ...cleanEnv(), ASK_JEV_LOG_FILE: logFile } });
   const summary = JSON.parse(stdout);
   assert.equal(summary.decisions.by_outcome.answered, decisions.filter((d) => d.outcome === "answered").length);
   assert.equal(summary.decisions.by_outcome.low_confidence, decisions.filter((d) => d.outcome === "low_confidence").length);
@@ -149,12 +150,12 @@ test("lib/jev.mjs: askJev retries 5xx until success within budget, logs retried 
     + "const a = await askJev('dummy', {x:1}, {ok:{type:'boolean',instructions:{question:'q',focus:'f'},criteria:{true:'t',false:'f'}}}, 'test', 8000); "
     + "process.stdout.write(JSON.stringify(a)); });";
   const { stdout } = await execFileAsync("node", ["-e", script], {
-    env: { ...process.env, ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile },
+    env: { ...cleanEnv(), ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile },
     encoding: "utf8",
   });
   server.close();
   assert.equal(calls, 4);
-  assert.deepEqual(JSON.parse(stdout), { ok: { probability: 0.5 } });
+  assert.deepEqual(JSON.parse(stdout), { ok: { probability: 0.5, confidence: 0.5 } });
 
   const call = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l))
     .filter((e) => e.kind === "call" && e.source === "test").at(-1);
@@ -178,7 +179,7 @@ test("lib/jev.mjs: a gateway that always 503s gives up within budget, with backo
     + "await askJev('dummy', {x:1}, {ok:{type:'boolean',instructions:{question:'q'},criteria:{true:'t',false:'f'}}}, 'test-503', 4000).catch(() => {}); "
     + "process.stdout.write(String(Date.now() - t)); });";
   const { stdout } = await execFileAsync("node", ["-e", script], {
-    env: { ...process.env, ASK_JEV_GATEWAY_URL: `http://127.0.0.1:${server.address().port}`, ASK_JEV_LOG_FILE: logFile },
+    env: { ...cleanEnv(), ASK_JEV_GATEWAY_URL: `http://127.0.0.1:${server.address().port}`, ASK_JEV_LOG_FILE: logFile },
     encoding: "utf8",
   });
   server.close();
@@ -198,7 +199,7 @@ test("lib/jev.mjs: a hanging gateway response stays within the requested budget"
     + `const t0 = Date.now(); try { await askJev('dummy', {x:1}, {ok:{type:'boolean',instructions:{question:'q',focus:'f'},criteria:{true:'t',false:'f'}}}, 'test', ${budgetMs}); } catch {} `
     + "process.stdout.write(String(Date.now() - t0)); });";
   const { stdout } = await execFileAsync("node", ["-e", script], {
-    env: { ...process.env, ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile },
+    env: { ...cleanEnv(), ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile },
     encoding: "utf8",
   });
   server.close();
@@ -210,7 +211,7 @@ test("lib/jev.mjs: a hanging gateway response stays within the requested budget"
 
 async function runRawEnv(input, url, extraEnv) {
   const child = execFileAsync("node", ["hooks/ask-jev.mjs"], {
-    env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile, ...extraEnv },
+    env: { ...cleanEnv(), ASK_JEV_API_KEY: "vck_dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile, ...extraEnv },
     encoding: "utf8",
   });
   child.child.stdin.end(JSON.stringify(input));
@@ -257,7 +258,7 @@ test("bidirectional (safe mode): personal forward/mirror contradiction still def
 });
 
 test("cli: wrong input shape fails with the expected shape, not a TypeError", async () => {
-  const run = execFileAsync("node", ["bin/jev.mjs"], { env: { ...process.env, AI_GATEWAY_API_KEY: "x" } });
+  const run = execFileAsync("node", ["bin/jev.mjs"], { env: { ...cleanEnv(), AI_GATEWAY_API_KEY: "x" } });
   run.child.stdin.end(JSON.stringify({ task: "t", context: "c", question: "q" }));
   await assert.rejects(run, (err) => /input must be \{"state"/.test(err.stderr) && /got keys: task, context, question/.test(err.stderr));
 });
@@ -294,4 +295,136 @@ test("filterRepo: same repo matches across ssh/https/credentials; other repos an
   const events = [{ repo: "git@github.com:yanmad27/ask-jev.git" }, { repo: "https://github.com/yanmad27/ask-jev" }, { repo: "git@github.com:tini-works/kiosk-app.git" }, {}];
   assert.equal(filterRepo(events, "https://github.com/yanmad27/ask-jev.git").length, 2);
   assert.deepEqual(filterRepo(events, null), [{}]);
+});
+
+// --- Providers: typesafe (default) vs vercel (legacy, chọn theo tiền tố key) ---
+
+function recorder(replies) {
+  const seen = [];
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      seen.push({ url: req.url, headers: req.headers, body: JSON.parse(body) });
+      const [status, headers, json] = replies[Math.min(seen.length, replies.length) - 1];
+      res.writeHead(status, { "content-type": "application/json", ...headers });
+      res.end(JSON.stringify(json));
+    });
+  });
+  return new Promise((r) => server.listen(0, "127.0.0.1", () => r({ server, seen, url: `http://127.0.0.1:${server.address().port}` })));
+}
+const callJev = (key, url, extraEnv = {}) => {
+  const script = "import('./lib/jev.mjs').then(async ({askJev}) => { "
+    + "const r = await askJev(process.env.K, {x:1}, {ok:{type:'boolean',instructions:{question:'q'},criteria:{true:'t',false:'f'}}}, 'test-provider', 6000).catch((e) => ({error: e.message})); "
+    + "process.stdout.write(JSON.stringify(r)); });";
+  return execFileAsync("node", ["-e", script], {
+    env: { ...cleanEnv(), K: key, ASK_JEV_PROVIDER: "", ASK_JEV_API_URL: url, ASK_JEV_LOG_FILE: logFile, ...extraEnv },
+    encoding: "utf8",
+  }).then(({ stdout }) => JSON.parse(stdout));
+};
+const yes = { ok: { probability: 0.9 }, ok__mirror: { probability: 0.1 } };
+
+test("provider: non-vck key → typesafe request (Bearer, body.model, type noul, no ai-* headers); noul maps to probability", async () => {
+  const { server, seen, url } = await recorder([[200, {}, { model: "jev-1.13.0", answers: { ok: { type: "noul", noul: 0.9 }, ok__mirror: { type: "noul", noul: 0.1 } } }]]);
+  const out = await callJev("tsk_abc", url);
+  server.close();
+  assert.equal(seen[0].headers.authorization, "Bearer tsk_abc");
+  assert.ok(!Object.keys(seen[0].headers).some((h) => h.startsWith("ai-")));
+  assert.equal(seen[0].body.model, "jev-latest");
+  assert.equal(seen[0].body.questions.ok.type, "noul");
+  assert.equal(seen[0].body.questions.ok__mirror.type, "noul");
+  assert.equal(out.ok.probability, 0.9);
+  const call = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.source === "test-provider").at(-1);
+  assert.equal(call.provider, "typesafe");
+  assert.equal(call.api_model, "jev-1.13.0");
+});
+
+test("provider: vck_ key → exact legacy Vercel request (headers, body without model, boolean type)", async () => {
+  const { server, seen, url } = await recorder([[200, {}, { answers: yes }]]);
+  const out = await callJev("vck_abc", url);
+  server.close();
+  const h = seen[0].headers;
+  assert.equal(seen[0].url, "/");
+  assert.equal(h.authorization, "Bearer vck_abc");
+  assert.equal(h["ai-model-id"], "typesafe-ai/jev");
+  assert.equal(h["ai-gateway-protocol-version"], "0.0.1");
+  assert.equal(h["ai-evaluation-model-specification-version"], "4");
+  assert.deepEqual(Object.keys(seen[0].body), ["state", "questions"]);
+  assert.equal(seen[0].body.questions.ok.type, "boolean");
+  assert.equal(out.ok.probability, 0.9);
+});
+
+test("provider: ASK_JEV_PROVIDER=vercel overrides key inference", async () => {
+  const { server, seen, url } = await recorder([[200, {}, { answers: yes }]]);
+  await callJev("tsk_abc", url, { ASK_JEV_PROVIDER: "vercel" });
+  server.close();
+  assert.equal(seen[0].headers["ai-model-id"], "typesafe-ai/jev");
+});
+
+test("typesafe: 429 is retried honoring retry-after; 401 explains where keys come from", async () => {
+  const { server, seen, url } = await recorder([[429, { "retry-after": "1" }, { error: "slow down" }], [200, {}, { answers: { ok: { noul: 0.9 }, ok__mirror: { noul: 0.1 } } }]]);
+  const t = Date.now();
+  const out = await callJev("tsk_abc", url);
+  server.close();
+  assert.equal(seen.length, 2);
+  assert.ok(Date.now() - t >= 1000, "waited for retry-after");
+  assert.equal(out.ok.probability, 0.9);
+
+  const bad = await recorder([[401, {}, { error: "bad key" }]]);
+  const err = await callJev("vck_abc", bad.url, { ASK_JEV_PROVIDER: "typesafe" });
+  bad.server.close();
+  assert.match(err.error, /console\.typesafe\.ai\/keys/);
+  assert.match(err.error, /ASK_JEV_PROVIDER=vercel/);
+  assert.doesNotMatch(err.error, /gateway/);
+});
+
+test("hook end-to-end on typesafe: a noul-only answer drives the decision via probability", async () => {
+  const { server, seen, url } = await recorder([[200, {}, { answers: { pick: { choice: "o0", probabilities: { o0: 0.95 } }, personal: { noul: 0.1 }, personal__mirror: { noul: 0.9 }, destructive: { noul: 0.1 }, destructive__mirror: { noul: 0.9 } } }]]);
+  const out = JSON.parse(await runRawEnv({ tool_name: "AskUserQuestion", session_id: `ts-${Math.random()}`, transcript_path: transcript, tool_input: { questions: [{ question: "TS?", options: opts }] } }, url, { ASK_JEV_API_KEY: "tsk_abc" }));
+  server.close();
+  assert.equal(seen[0].body.model, "jev-latest");
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /"TS\?" → A/);
+});
+
+test("provider/endpoint: defaults per provider, inference, legacy var, case-insensitive and unknown ASK_JEV_PROVIDER", () => {
+  const saved = { ...process.env };
+  for (const k of Object.keys(process.env)) if (/^(ASK_)?JEV_|^(TYPESAFE|AI_GATEWAY)_API_KEY$/.test(k)) delete process.env[k];
+  try {
+    assert.deepEqual(endpoint("typesafe"), { url: "https://api.typesafe.ai/v1/systemone", model: "jev-latest" });
+    assert.deepEqual(endpoint("vercel"), { url: "https://ai-gateway.vercel.sh/v4/ai/evaluation-model", model: "typesafe-ai/jev" });
+    assert.equal(provider("vck_x"), "vercel");
+    assert.equal(provider("tsk_x"), "typesafe");
+    process.env.AI_GATEWAY_API_KEY = "eyJoidc";
+    assert.equal(provider("eyJoidc"), "vercel");
+    process.env.TYPESAFE_API_KEY = "eyJoidc";
+    assert.equal(provider("eyJoidc"), "typesafe");
+    process.env.ASK_JEV_PROVIDER = "Vercel";
+    assert.equal(provider("tsk_x"), "vercel");
+    for (const bad of ["constructor", "nope"]) {
+      process.env.ASK_JEV_PROVIDER = bad;
+      assert.throws(() => provider("tsk_x"), /ASK_JEV_PROVIDER must be one of typesafe, vercel/);
+    }
+  } finally {
+    for (const k of Object.keys(process.env)) delete process.env[k];
+    Object.assign(process.env, saved);
+  }
+});
+
+test("cli on typesafe: boolean answer is exactly {probability, confidence} — no raw noul/type", async () => {
+  const { server, url } = await recorder([[200, {}, { model: "jev-1.13.0", answers: { ok: { type: "noul", noul: 0.9 }, ok__mirror: { type: "noul", noul: 0.1 } } }]]);
+  const run = execFileAsync("node", ["bin/jev.mjs"], { env: { ...cleanEnv(), TYPESAFE_API_KEY: "tsk_abc", ASK_JEV_API_URL: url, ASK_JEV_LOG_FILE: logFile } });
+  run.child.stdin.end(JSON.stringify({ state: { x: 1 }, questions: { ok: { type: "boolean", instructions: { question: "q" }, criteria: { true: "t", false: "f" } } } }));
+  const { stdout } = await run;
+  server.close();
+  const a = JSON.parse(stdout);
+  assert.deepEqual(Object.keys(a.ok).sort(), ["confidence", "probability"]);
+  assert.ok(Math.abs(a.ok.probability - 0.9) < 1e-9);
+  assert.ok(Math.abs(a.ok.confidence - 0.9) < 1e-9);
+});
+
+test("401 hint on the vercel path when the key is not a Vercel key", async () => {
+  const bad = await recorder([[401, {}, { error: "bad" }]]);
+  const err = await callJev("tsk_abc", bad.url, { ASK_JEV_PROVIDER: "vercel" });
+  bad.server.close();
+  assert.match(err.error, /ASK_JEV_PROVIDER=typesafe/);
 });
