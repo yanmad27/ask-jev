@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/yanmad27/ask-jev/compare/v1.3.1...v1.4.0) (2026-09-25)
+
+
+### Features
+
+* **jev:** call typesafe.ai directly, keep Vercel gateway as legacy provider ([#39](https://github.com/yanmad27/ask-jev/issues/39)) ([cdcd0f6](https://github.com/yanmad27/ask-jev/commit/cdcd0f660327ae99dc59818e1ec5bdf93775a0fa))
+
 ## [1.3.1](https://github.com/yanmad27/ask-jev/compare/v1.3.0...v1.3.1) (2026-09-23)
 
 
