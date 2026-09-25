@@ -78,7 +78,7 @@ async function main() {
   if (invalid) return fail(`${invalid}. ${NOT_CHAT}`);
 
   const key = apiKey();
-  if (!key) return fail("no API key (set AI_GATEWAY_API_KEY or ~/.claude/ask-jev.key)");
+  if (!key) return fail("no API key (set TYPESAFE_API_KEY or ~/.claude/ask-jev.key)");
 
   try {
     const answers = await askJev(key, input.state, input.questions);

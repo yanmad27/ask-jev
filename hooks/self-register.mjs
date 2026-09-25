@@ -5,7 +5,7 @@
  * Bug hiện tại của Claude Code (anthropics/claude-code#36397): PreToolUse hook
  * khai trong hooks/hooks.json của plugin không chạy — chỉ SessionStart chạy
  * được từ plugin. Nên hook chính (ask-jev.mjs) không bao giờ được gọi dù cài
- * đúng, key đúng, gateway đúng. Script này chạy mỗi SessionStart (cơ chế
+ * đúng, key đúng, API đúng. Script này chạy mỗi SessionStart (cơ chế
  * plugin duy nhất còn hoạt động) để tự ghi entry PreToolUse cho
  * AskUserQuestion thẳng vào settings.json — nơi hook khai trực tiếp vẫn chạy
  * bình thường.
@@ -13,7 +13,7 @@
  * Tự sửa mỗi phiên: bản plugin đổi (cache dir đổi theo version), hay đường dẫn
  * cũ từ trước lần đổi tên jev-ask → ask-jev, đều tự cập nhật lại, không cần
  * người dùng làm gì. Hết bug ở Claude Code thì entry này thừa nhưng vô hại —
- * hai hook cùng "deny" một câu hỏi không sai, chỉ tốn thêm một lần gọi gateway.
+ * hai hook cùng "deny" một câu hỏi không sai, chỉ tốn thêm một lần gọi API.
  *
  * Không đụng gì khác trong settings.json ngoài đúng entry của mình. Đọc/ghi
  * lỗi kiểu gì cũng im lặng bỏ qua — hook phụ này không được phép làm hỏng

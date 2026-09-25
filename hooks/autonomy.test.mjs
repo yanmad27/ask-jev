@@ -1,3 +1,4 @@
+import { cleanEnv } from "./testenv.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -29,10 +30,10 @@ function dynamicStub(responder) {
 
 async function run(script, input, url, mode) {
   const path = fileURLToPath(new URL(script, import.meta.url));
-  const env = { ...process.env };
-  delete env.PASEO_AGENT_ID; // hermetic: don't let an ambient Paseo agent make ask-jev.mjs stand down
-  Object.assign(env, { AI_GATEWAY_API_KEY: "dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile, ASK_JEV_AUTONOMY: mode, ASK_JEV_REMIND: "0", ASK_JEV_GATES: "permission,stop,bash,prompt" });
-  const child = execFileAsync("node", [path], { env, encoding: "utf8" });
+  const child = execFileAsync("node", [path], {
+    env: { ...cleanEnv(), ASK_JEV_API_KEY: "vck_dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile, ASK_JEV_AUTONOMY: mode, ASK_JEV_REMIND: "0", ASK_JEV_GATES: "permission,stop,bash,prompt" },
+    encoding: "utf8",
+  });
   child.child.stdin.end(JSON.stringify(input));
   return (await child).stdout;
 }

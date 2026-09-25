@@ -91,7 +91,7 @@ echo '<json above>' | node "${CLAUDE_PLUGIN_ROOT}/bin/jev.mjs"
 ```
 
 Prints the raw `answers` object to stdout, or exits non-zero with a one-line
-stderr message (no key, malformed input, gateway error, timeout).
+stderr message (no key, malformed input, API error, timeout).
 
 ## Reading the result
 

@@ -1,3 +1,4 @@
+import { cleanEnv } from "./testenv.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync, readFileSync, mkdirSync, mkdtempSync } from "node:fs";
@@ -18,7 +19,7 @@ function tmpHome() {
 async function callBuildState(opts, home, extraEnv = {}) {
   const modulePath = join(repoRoot, "lib", "context.mjs").replace(/\\/g, "/");
   const script = `import("${modulePath}").then(({buildState}) => { process.stdout.write(JSON.stringify(buildState(${JSON.stringify(opts)}))); });`;
-  const { stdout } = await execFileAsync("node", ["-e", script], { env: { ...process.env, HOME: home, ...extraEnv }, encoding: "utf8" });
+  const { stdout } = await execFileAsync("node", ["-e", script], { env: { ...cleanEnv(), HOME: home, ...extraEnv }, encoding: "utf8" });
   return JSON.parse(stdout);
 }
 
@@ -88,7 +89,7 @@ test("buildState: user_past_choices puts same-cwd entries first", async () => {
 async function runAnswerHook(toolResponse, logFile) {
   const script = join(repoRoot, "hooks", "ask-jev-answer.mjs");
   const input = { tool_name: "AskUserQuestion", session_id: "sess-1", cwd: "/repo", tool_response: toolResponse };
-  const child = execFileAsync("node", [script], { env: { ...process.env, AI_GATEWAY_API_KEY: "dummy", ASK_JEV_LOG_FILE: logFile }, encoding: "utf8" });
+  const child = execFileAsync("node", [script], { env: { ...cleanEnv(), ASK_JEV_API_KEY: "vck_dummy", ASK_JEV_LOG_FILE: logFile }, encoding: "utf8" });
   child.child.stdin.end(JSON.stringify(input));
   await child;
 }
