@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/yanmad27/ask-jev/compare/v1.4.0...v1.5.0) (2026-09-28)
+
+
+### Features
+
+* **jev:** let Jev answer questions inside Paseo and log every decision ([#41](https://github.com/yanmad27/ask-jev/issues/41)) ([b523ceb](https://github.com/yanmad27/ask-jev/commit/b523ceb25c7405b8e3ca65c18c785b53f17227f1))
+
 ## [1.4.0](https://github.com/yanmad27/ask-jev/compare/v1.3.1...v1.4.0) (2026-09-25)
 
 
