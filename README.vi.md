@@ -85,23 +85,42 @@ Bốn lớp xếp chồng lên nhau:
 Trước khi Claude Code hiện câu hỏi cho bạn, ask-jev gửi nó cho Jev để phán
 đoán hai việc:
 
-1. **Đây có phải là việc của bạn để quyết không?** Sở thích, ưu tiên riêng
-   tư, hay bất cứ điều gì không thể hoàn tác (xoá, gửi, publish, tiêu tiền)
-   — Jev từ chối đụng vào, dù đáp án "đúng" có vẻ hiển nhiên tới đâu.
+1. **Đây có phải là việc của bạn để quyết không?** Bất cứ điều gì không thể
+   hoàn tác (xoá, gửi, publish, tiêu tiền) luôn tới tay bạn — Jev không bao
+   giờ đụng vào, dù đáp án "đúng" có vẻ hiển nhiên tới đâu. Sở thích và ưu
+   tiên cá nhân thì khác: Jev cũng trả lời được, nhưng chỉ khi có **căn cứ**
+   — lời của chính bạn hoặc lựa chọn thật trong quá khứ chỉ rõ một option cụ
+   thể (xem [Autonomy](#4-autonomy) để biết chế độ `safe`, nơi sở thích luôn
+   tới tay bạn).
 2. **Nếu không, đáp án nào đúng** — dựa trên mọi thứ đã nói trong cuộc
    hội thoại tới giờ?
 
-Chỉ khi Jev vừa tự tin vừa chắc chắn câu hỏi không mang tính cá nhân, Claude
-mới nhận được đáp án một cách âm thầm và tiếp tục. Ngược lại, câu hỏi vẫn
-tới tay bạn y như khi chưa cài ask-jev.
+Chỉ khi Jev vừa tự tin vừa (không mang tính cá nhân, hoặc có căn cứ từ chính
+bằng chứng của bạn), Claude mới nhận được đáp án một cách âm thầm và tiếp
+tục. Ngược lại, câu hỏi vẫn tới tay bạn y như khi chưa cài ask-jev.
 
-**Trong [Paseo](#trong-paseo), hook này đứng im.** Paseo biến `AskUserQuestion`
-thành một câu hỏi native mà bạn trả lời ngay trong app, và hook của Claude Code
-chỉ có thể "trả lời" bằng cách deny tool — Paseo hiển thị thành khối lỗi đỏ
-`hook error` dù đáp án của Jev vẫn tới model. Nên trong Paseo (nhận biết qua
-`PASEO_AGENT_ID`) hook tự-trả-lời đứng im: mọi câu hỏi tới tay bạn như bình
-thường. Việc hỏi Jev trực tiếp cho các phán đoán (bên dưới) chạy qua CLI nên
-vẫn hoạt động ở mọi nơi; panel thống kê vẫn ghi nhận.
+**Trong [Paseo](#trong-paseo), cài [Paseo plugin](paseo-plugin/README.md) là
+nó trả lời native — không qua hook, không có `hook error` màu đỏ nào cả.**
+Plugin tự lắng nghe permission request và trả lời bằng `respondToPermission`
+trực tiếp, thay vì một hook Claude Code phải deny tool. Một request có nhiều
+câu hỏi là tất-cả-hoặc-không-gì: nếu Jev bỏ qua dù chỉ một câu, cả request
+tới tay bạn chưa được trả lời, chứ không trả lời một phần. Mỗi đáp án của
+Jev được báo lại trong timeline của agent dưới dạng `Jev chose "X" (0.93)`.
+Hook `AskUserQuestion` của Claude Code vẫn đứng im dưới `PASEO_AGENT_ID` dù
+sao đi nữa (ghi log dưới dạng `diagnostic`, không phải `decision`, nên không
+làm lệch số liệu thống kê), nên hai bên không bao giờ giành nhau cùng một
+câu hỏi. Không cài plugin thì mọi câu hỏi trong Paseo vẫn tới tay bạn như
+bình thường — hỏi Jev trực tiếp cho các phán đoán (bên dưới) chạy qua CLI
+nên vẫn hoạt động dù có plugin hay không; panel thống kê vẫn ghi nhận.
+
+Plugin cần cùng một Jev API key như các hook — `~/.claude/ask-jev.key`, hoặc
+`TYPESAFE_API_KEY`/`ASK_JEV_API_KEY` — nhưng được đọc từ môi trường và home
+directory của **Paseo daemon**, không phải shell bạn đang gõ lệnh. Nếu bạn
+chỉ export key trong shell rc, daemon có thể không bao giờ thấy nó; file key
+tránh được vấn đề đó. Chỉ nên cài **một** bản plugin: hai bản cùng chạy
+trong một process (vd `ask-jev` và một bản dev cục bộ `ask-jev-dev`) dùng
+chung một dedupe map trong bộ nhớ nên sẽ không cùng trả lời một request,
+nhưng không có lý do gì để chạy hai bản.
 
 <details>
 <summary>Option cần định nghĩa thật sự, multiSelect, và khi nào nó im lặng</summary>
@@ -138,7 +157,8 @@ chọn, nối bằng dấu phẩy — có thể là "none".
 
 | Điều kiện | Vì sao |
 |---|---|
-| câu hỏi mang tính cá nhân (`personal > 0.5`) | đó là việc của bạn, không phải của model |
+| mang tính cá nhân và autonomy `safe` (`personal > 0.5`) | đó là việc của bạn, không phải của model |
+| mang tính cá nhân ở autonomy `full` nhưng thiếu căn cứ hoặc độ tin thấp (`grounded` hoặc pick `< ASK_JEV_ASK_THRESHOLD`) | không có bằng chứng thật rằng bạn sẽ chọn một option cụ thể — một prior chung chung không phải là căn cứ |
 | Jev không đủ tự tin (`< ASK_JEV_ASK_THRESHOLD`) | đoán bừa còn tệ hơn hỏi |
 | một option thiếu mô tả | nhãn trơn thì Jev không phán đoán được — trả về cho Claude, không chuyển cho Jev |
 | không có ngữ cảnh dùng được trong transcript | không có gì để Jev đối chiếu |
@@ -337,10 +357,12 @@ quyết định về cho bạn.
 
 Những gì thay đổi ở `full`:
 
-- **`AskUserQuestion`** — kiểm tra `personal` (đây có phải việc của người
-  dùng không?) không còn tự nó gây fallback; chỉ `destructive` mới gây. Một
-  câu hỏi Jev tự tin vẫn được trả lời dù nó đọc như sở thích cá nhân, miễn
-  là không phá huỷ.
+- **`AskUserQuestion`** — một câu hỏi mang tính sở thích/cá nhân không còn tự
+  động fallback nữa. Jev còn kiểm tra xem pick có `grounded` không — lời của
+  chính bạn hoặc lựa chọn thật trong quá khứ có ủng hộ một option cụ thể — và
+  chỉ trả lời khi cả `grounded` lẫn độ tin của pick đều vượt ngưỡng; ngược
+  lại nó bỏ qua với outcome `ungrounded_personal`. `destructive` vẫn luôn
+  buộc bỏ qua bất kể có căn cứ hay không.
 - **gate `prompt`** — một prompt mơ hồ không bao giờ biến thành "hỏi người
   dùng" nữa. Thay vào đó Jev phán đoán xem cách hiểu nghĩa đen có khả thi
   không: nếu có, Claude tiến hành và nêu rõ giả định trong một dòng; nếu
@@ -390,12 +412,22 @@ cũ.
 
 ## Usage analytics
 
-Mỗi lời gọi API và mỗi quyết định của hook được ghi thêm một dòng JSON
+Mỗi lời gọi API và mỗi quyết định — một gate, một câu trả lời trong Paseo,
+hay một lời gọi CLI trực tiếp tới `bin/jev.mjs` — được ghi thêm một dòng JSON
 vào `~/.claude/ask-jev.log` (đổi đường dẫn bằng `ASK_JEV_LOG_FILE`, tắt hẳn
-bằng `ASK_JEV_LOG=0`). Mỗi dòng quyết định mang theo `gate` nào tạo ra nó
-(`ask`, `permission`, `stop`, `bash`, `prompt`), đáp án của Jev dưới dạng
-`label` + `confidence`, và một `reason` ngắn — phần tiêu chí Jev khớp,
-không bao giờ là transcript hội thoại hay payload `state` đã gửi cho Jev.
+bằng `ASK_JEV_LOG=0`). Mỗi dòng đều có một `event_id` duy nhất. Mỗi dòng
+quyết định của gate mang theo `gate` nào tạo ra nó (`ask`, `permission`,
+`stop`, `bash`, `prompt`), đáp án của Jev dưới dạng `label` + `confidence`,
+và một `reason` ngắn — phần tiêu chí Jev khớp, không bao giờ là transcript
+hội thoại hay payload `state` đã gửi cho Jev; một lời gọi `bin/jev.mjs` trực
+tiếp ghi log cùng cấu trúc đó cho mỗi câu hỏi (`question`, `options`,
+`result`, `confidence`). Một lần đứng im của [Paseo](#trong-paseo) được ghi
+dưới dạng `kind:"diagnostic"`, không phải `"decision"`, nên không tính vào
+các con số tổng bên dưới. Chỉ một câu trả lời thật của con người mới được
+ghi dưới dạng `kind:"user_choice"` — từ một `AskUserQuestion` bình thường
+của Claude Code (một hook `PostToolUse`) hoặc từ việc bạn tự trả lời trong
+Paseo khi Jev bỏ qua; đáp án của chính Jev luôn được ghi là `"decision"`,
+không bao giờ là `"user_choice"`.
 
 Xem bằng:
 
@@ -448,7 +480,9 @@ Muốn có dashboard trực tiếp thay vì script, cài
 [Paseo plugin](paseo-plugin/README.md) — một workspace panel với stat
 tile, bộ lọc theo gate cùng bảng phân tích outcome, và một bảng quyết định
 cập nhật trực tiếp (Time, Gate, Outcome, Question/Subject, Answer, Reason).
-Click vào một dòng để xem đầy đủ. Settings → Plugins → dán vào "Plugin
+Click vào một dòng để xem đầy đủ. Cùng một plugin đó cũng tự trả lời
+`AskUserQuestion` (xem [ở trên](#1-tự-trả-lời-askuserquestion)) — cài một
+lần là đủ cho cả hai. Settings → Plugins → dán vào "Plugin
 source" → Install:
 
 ```
@@ -496,6 +530,13 @@ push-rồi-update:
 Commit theo chuẩn [Conventional Commits](https://www.conventionalcommits.org)
 (`feat:`/`fix:`/`docs:`…) — release-please mở một PR release tự bump
 `plugin.json` và gắn tag khi merge, nên không cần tag thủ công.
+
+Sửa `lib/*.mjs`? [Paseo plugin](paseo-plugin/README.md) dùng lại đúng chính
+sách đó từ một bản sao y hệt dưới `paseo-plugin/shared/` (Paseo chỉ stage
+`paseo-plugin/`, nên không đọc trực tiếp `../lib/` được). Chạy
+`./scripts/sync-paseo-shared.sh` sau khi sửa `lib/` — CI áp đặt điều này
+bằng `scripts/sync-paseo-shared.sh --check` và fail build nếu hai bên lệch
+nhau.
 
 ### Evals
 
