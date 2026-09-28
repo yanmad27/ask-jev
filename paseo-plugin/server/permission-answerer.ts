@@ -47,6 +47,16 @@ interface TrackedRequest {
    * comparing values, regardless of whether resolved arrives before or after respond() returns. */
   jevAnswers?: Record<string, string>;
   jevResults?: PickResult[];
+  /** respondToPermission threw — we genuinely don't know whether the daemon got it. Treated like a
+   * deferred entry (long TTL, no proactive race_lost/unconfirmed) unless the resolved event later
+   * shows it landed after all (resolvedAnswers matches jevAnswers → still "answered"). */
+  respondFailed?: boolean;
+}
+
+/** True only when we believe the answer is genuinely in flight to the daemon — not when our own
+ * send already failed client-side (respondFailed), which has nothing to confirm or lose a race on. */
+function awaitingConfirmation(tracked: Pick<TrackedRequest, "jevAnswers" | "respondFailed">): boolean {
+  return Boolean(tracked.jevAnswers) && !tracked.respondFailed;
 }
 
 const INFLIGHT_KEY = Symbol.for("ask-jev.paseo.inflight");
@@ -71,12 +81,14 @@ function sweepStale(map: Map<string, TrackedRequest>) {
   const ttl = trackedTtlMs();
   for (const [key, tracked] of map) {
     const age = now - tracked.createdAt;
-    if (tracked.jevAnswers) {
-      if (tracked.resolved || age < ttl) continue;
+    if (awaitingConfirmation(tracked)) {
+      if (age < ttl) continue;
       logPerQuestion(tracked.questions, metaOf(tracked), "unconfirmed", () => undefined);
       map.delete(key);
     } else if (age >= DEFERRED_TTL_MS) {
-      map.delete(key); // safety cap only — "deferred" was already logged when we decided not to answer
+      // Safety cap only — a plain deferral already logged "deferred", and a respondFailed entry
+      // already logged its diagnostic, when we decided/found out we hadn't answered.
+      map.delete(key);
     }
   }
 }
@@ -163,13 +175,14 @@ function blockerReason(q: PaseoQuestion, r: PickResult): string {
   return isEmptyMultiSelect(q, r) ? "empty_selection" : "sibling_blocked";
 }
 
-/** Matches the daemon's own join (", ") against the question's known labels, rather than blindly
- * splitting on every comma — a label that itself contains a comma would otherwise be torn apart. */
+/** Splits on the daemon's own join (", "), unless the whole raw string already matches a single
+ * known label as-is (covers a label that itself contains a comma). Unmatched parts (a free-typed
+ * "Other" addition alongside real picks) are kept, not dropped — kind_of_answer downstream reflects
+ * whether every part matched a known label. */
 function parseMultiSelectAnswer(raw: string, options: PaseoOption[]): string[] {
   const labels = new Set(options.map((o) => o.label));
   if (labels.has(raw)) return [raw];
-  const parts = raw.split(", ").filter((part) => labels.has(part));
-  return parts.length > 0 ? parts : [raw]; // free-typed ("Other") text — keep it, don't drop it
+  return raw.split(", ");
 }
 
 function sameAnswers(a: Record<string, string> | undefined, b: Record<string, string>): boolean {
@@ -251,9 +264,12 @@ export function registerPermissionAnswerer(server: PluginServerContext): () => v
       // if it never does).
     } catch {
       if (tracked.jevAnswers) {
-        // respondToPermission may have thrown after actually reaching the daemon — we don't know
-        // whether it landed. Don't log a per-question "error" that a later "answered" (resolved
-        // handler) or "unconfirmed" (TTL sweep) would then contradict; just note it happened.
+        // respondToPermission threw — maybe before, maybe after actually reaching the daemon; we
+        // can't tell. Mark it so sweepStale/the resolved handler treat this like a deferral (long
+        // TTL, no proactive race_lost/unconfirmed) rather than assuming either outcome. Don't log a
+        // per-question "error" that a later "answered" (if it turns out to have landed) would then
+        // contradict; just note it happened.
+        tracked.respondFailed = true;
         logEvent({ kind: "diagnostic", source: "paseo", gate: "ask", outcome: "error", ...meta });
       } else {
         logPerQuestion(questions, meta, "error", () => undefined);
@@ -304,12 +320,13 @@ export function registerPermissionAnswerer(server: PluginServerContext): () => v
         return;
       }
 
-      // Either Jev never answered this one (deferred to the user), or it did but the daemon's real
-      // resolution doesn't match what we sent — our respond was a stale no-op on an
-      // already-resolved request. The latter is a race we lost, worth its own stat alongside the
-      // user_choice provenance; the former already logged its "deferred" reason when we decided
-      // not to answer, so no additional decision line is needed for it.
-      if (tracked.jevAnswers) {
+      // Three ways to land here: Jev never answered (deferred to the user — "deferred" was already
+      // logged, nothing more to add); Jev answered and respondToPermission genuinely raced a stale
+      // no-op against an already-resolved request (a real race lost, worth its own stat); or
+      // respondToPermission itself threw and this mismatch just confirms it never reached the
+      // daemon (already covered by the diagnostic logged at throw time — not a race, so no
+      // race_lost here).
+      if (awaitingConfirmation(tracked)) {
         logPerQuestion(tracked.questions, meta, "race_lost", () => undefined);
       }
 
@@ -341,11 +358,14 @@ export function registerPermissionAnswerer(server: PluginServerContext): () => v
     offResolved();
     // Unstick any in-flight Jev work THIS instance started so it never calls respondToPermission
     // after unload — it'll just log race_lost and leave the request for the user. Entries owned by
-    // the other installed copy (if any) are left alone; they're that copy's responsibility.
-    for (const tracked of inflightMap().values()) {
+    // the other installed copy (if any) are left alone; they're that copy's responsibility. Deleted
+    // (not just marked resolved) so they don't linger in the shared map across reloads.
+    const map = inflightMap();
+    for (const [key, tracked] of map) {
       if (tracked.owner !== owner) continue;
       tracked.resolved = true;
       tracked.waiters.forEach((w) => w());
+      map.delete(key);
     }
   };
 }

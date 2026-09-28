@@ -477,6 +477,80 @@ test("respondToPermission throwing after the answer was sent: no per-question er
   assert.equal(readLog().filter((e) => e.kind === "user_choice").length, 0);
 });
 
+test("respondToPermission throwing and NEVER landing: survives the short TTL (follows the deferred lifecycle), a later human answer logs user_choice with no spurious race_lost/unconfirmed", async () => {
+  const { server, handlers } = makeServer();
+  registerPermissionAnswerer(server);
+  const request = { ...requestedSingle.request, id: "permission-respond-throws-never-lands-test" };
+  const q = request.input.questions[0].question;
+  mockFetch(() => ({ pick: { choice: "o0", probabilities: { o0: 0.95, o1: 0.05 } }, ...SAFE_BOOLEANS }));
+  const ctx = makeContext(withUserMessage, {
+    onRespond: () => {
+      throw new Error("network blip — never reached the daemon");
+    },
+  });
+
+  process.env.ASK_JEV_PASEO_TTL_MS = "10"; // the short (awaiting-confirmation) TTL — must NOT apply here
+  try {
+    await handlers["agent.permission_requested"]({ agent: requestedSingle.agent, request }, ctx);
+    await new Promise((r) => setTimeout(r, 20));
+    // Trigger a sweep well past the short TTL.
+    await handlers["agent.permission_requested"]({ agent: requestedSingle.agent, request: { ...request, id: "permission-unrelated-sweep-trigger-3", kind: "tool" } }, ctx);
+  } finally {
+    delete process.env.ASK_JEV_PASEO_TTL_MS;
+  }
+  assert.equal(readLog().filter((e) => e.kind === "decision" && e.request_id === request.id && e.outcome === "unconfirmed").length, 0);
+
+  await handlers["agent.permission_resolved"]({ agent: requestedSingle.agent, requestId: request.id, resolution: { behavior: "allow", updatedInput: { answers: { [q]: "Blue" } } } }, ctx);
+
+  const choices = readLog().filter((e) => e.kind === "user_choice" && e.question === q);
+  assert.equal(choices.length, 1);
+  assert.deepEqual(choices[0].chosen, ["Blue"]);
+  // Not a race we lost — our own send failed, already reported as a diagnostic at throw time.
+  assert.equal(readLog().filter((e) => e.kind === "decision" && e.request_id === request.id && e.outcome === "race_lost").length, 0);
+});
+
+test("unload deletes this instance's own tracked entries so a later attempt at the same request isn't blocked by a stale dedupe entry", async () => {
+  const { server, handlers } = makeServer();
+  const cleanupA = registerPermissionAnswerer(server);
+  const ctx = makeContext(withUserMessage);
+  const request = { ...requestedSingle.request, id: "permission-unload-leak-test" };
+
+  const firstCalls = mockFetch(() => ({ pick: { choice: "o0", probabilities: { o0: 0.95, o1: 0.05 } }, ...SAFE_BOOLEANS }));
+  await handlers["agent.permission_requested"]({ agent: requestedSingle.agent, request }, ctx);
+  assert.equal(firstCalls.length, 1);
+  assert.equal(ctx.responded.length, 1); // answered, but no resolved event has arrived — still tracked, unresolved
+
+  cleanupA(); // unloads this instance; must delete its own unresolved entries, not just mark them resolved
+
+  registerPermissionAnswerer(server); // a fresh instance re-registers on the same shared handlers/map
+  const secondCalls = mockFetch(() => ({ pick: { choice: "o0", probabilities: { o0: 0.95, o1: 0.05 } }, ...SAFE_BOOLEANS }));
+  await handlers["agent.permission_requested"]({ agent: requestedSingle.agent, request }, ctx);
+
+  assert.equal(secondCalls.length, 1, "the new instance must process the request fresh, not skip it as an already-tracked duplicate");
+});
+
+test("mixed multiSelect answer (a known label plus free-typed text) keeps both parts and is logged as free_text", async () => {
+  const { server, handlers } = makeServer();
+  registerPermissionAnswerer(server);
+  const ctx = makeContext(withUserMessage);
+  const request = { ...requestedMultiselect.request, id: "permission-mixed-multiselect-test" };
+
+  delete process.env.TYPESAFE_API_KEY; // forces an immediate "no_key" defer — no Jev call needed for this
+  try {
+    await handlers["agent.permission_requested"]({ agent: requestedMultiselect.agent, request }, ctx);
+  } finally {
+    process.env.TYPESAFE_API_KEY = "tsk_test_dummy";
+  }
+
+  const q = request.input.questions[0].question;
+  await handlers["agent.permission_resolved"]({ agent: requestedMultiselect.agent, requestId: request.id, resolution: { behavior: "allow", updatedInput: { answers: { [q]: "Apple, my own text" } } } }, ctx);
+
+  const choices = readLog().filter((e) => e.kind === "user_choice");
+  assert.equal(choices.length, 1);
+  assert.deepEqual(choices[0].chosen, ["Apple", "my own text"]);
+  assert.equal(choices[0].kind_of_answer, "free_text");
+});
+
 test("Jev-resolved question never logs user_choice, even when Paseo echoes the resolution back", async () => {
   const { server, handlers } = makeServer();
   registerPermissionAnswerer(server);
