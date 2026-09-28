@@ -57,19 +57,27 @@ function inflightMap(): Map<string, TrackedRequest> {
   return g[INFLIGHT_KEY] as Map<string, TrackedRequest>;
 }
 
+// A deferred request (Jev never answered — no jevAnswers) has no bounded confirmation to wait
+// for; it just waits for whenever the human actually answers. It only needs a long safety cap so
+// an agent that's archived without ever resolving doesn't leak the entry forever.
+const DEFERRED_TTL_MS = 24 * 60 * 60_000;
+
 /** Evicts entries this sweep call notices are stale, logging unconfirmed for ones we actually
- * answered but never heard back on. Entries that already logged a terminal outcome at defer time
- * (no_key, no_context, missing_definition, ...) are just dropped — nothing more to say. */
+ * answered but never heard back on. Deferred entries (never answered) are left alone until they
+ * resolve or hit the long safety cap — sweeping them on the short TTL would drop a request the
+ * user hasn't gotten to yet, silently losing its eventual user_choice. */
 function sweepStale(map: Map<string, TrackedRequest>) {
   const now = Date.now();
   const ttl = trackedTtlMs();
   for (const [key, tracked] of map) {
-    if (now - tracked.createdAt < ttl) continue;
-    if (tracked.jevAnswers && !tracked.resolved) {
-      const meta = metaOf(tracked);
-      logPerQuestion(tracked.questions, meta, "unconfirmed", () => undefined);
+    const age = now - tracked.createdAt;
+    if (tracked.jevAnswers) {
+      if (tracked.resolved || age < ttl) continue;
+      logPerQuestion(tracked.questions, metaOf(tracked), "unconfirmed", () => undefined);
+      map.delete(key);
+    } else if (age >= DEFERRED_TTL_MS) {
+      map.delete(key); // safety cap only — "deferred" was already logged when we decided not to answer
     }
-    map.delete(key);
   }
 }
 
@@ -160,7 +168,8 @@ function blockerReason(q: PaseoQuestion, r: PickResult): string {
 function parseMultiSelectAnswer(raw: string, options: PaseoOption[]): string[] {
   const labels = new Set(options.map((o) => o.label));
   if (labels.has(raw)) return [raw];
-  return raw.split(", ").filter((part) => labels.has(part));
+  const parts = raw.split(", ").filter((part) => labels.has(part));
+  return parts.length > 0 ? parts : [raw]; // free-typed ("Other") text — keep it, don't drop it
 }
 
 function sameAnswers(a: Record<string, string> | undefined, b: Record<string, string>): boolean {
@@ -241,7 +250,14 @@ export function registerPermissionAnswerer(server: PluginServerContext): () => v
       // to tracked.jevAnswers, whenever that event actually arrives (sweepStale() logs "unconfirmed"
       // if it never does).
     } catch {
-      logPerQuestion(questions, meta, "error", () => undefined);
+      if (tracked.jevAnswers) {
+        // respondToPermission may have thrown after actually reaching the daemon — we don't know
+        // whether it landed. Don't log a per-question "error" that a later "answered" (resolved
+        // handler) or "unconfirmed" (TTL sweep) would then contradict; just note it happened.
+        logEvent({ kind: "diagnostic", source: "paseo", gate: "ask", outcome: "error", ...meta });
+      } else {
+        logPerQuestion(questions, meta, "error", () => undefined);
+      }
     }
   });
 
@@ -288,13 +304,21 @@ export function registerPermissionAnswerer(server: PluginServerContext): () => v
         return;
       }
 
-      // Either Jev never answered this one, or the daemon's real resolution doesn't match what we
-      // sent (our respond was a stale no-op on an already-resolved request) — either way, these are
-      // the human's real answers taking effect, so they're the provenance worth recording.
+      // Either Jev never answered this one (deferred to the user), or it did but the daemon's real
+      // resolution doesn't match what we sent — our respond was a stale no-op on an
+      // already-resolved request. The latter is a race we lost, worth its own stat alongside the
+      // user_choice provenance; the former already logged its "deferred" reason when we decided
+      // not to answer, so no additional decision line is needed for it.
+      if (tracked.jevAnswers) {
+        logPerQuestion(tracked.questions, meta, "race_lost", () => undefined);
+      }
+
       for (const q of tracked.questions) {
         const chosenRaw = resolvedAnswers[q.question];
         if (chosenRaw === undefined) continue;
         const chosen = q.multiSelect ? parseMultiSelectAnswer(chosenRaw, q.options ?? []) : [chosenRaw];
+        const labels = new Set((q.options ?? []).map((o) => o.label));
+        const kindOfAnswer = chosen.every((c) => labels.has(c)) ? "option" : "free_text";
         logEvent({
           kind: "user_choice",
           source: "paseo",
@@ -304,6 +328,7 @@ export function registerPermissionAnswerer(server: PluginServerContext): () => v
           question: q.question,
           options: (q.options ?? []).map((o) => o.label),
           chosen,
+          kind_of_answer: kindOfAnswer,
         });
       }
     } catch {

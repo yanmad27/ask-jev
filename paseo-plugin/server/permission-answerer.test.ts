@@ -296,6 +296,7 @@ test("human-resolved question (Jev never answered) logs user_choice", async () =
   assert.deepEqual(choices[0].chosen, ["Blue"]);
   assert.deepEqual(choices[0].options, ["Red", "Blue"]);
   assert.equal(choices[0].cwd, requestedSingle.agent.cwd);
+  assert.equal(choices[0].kind_of_answer, "option");
 });
 
 test("multiSelect user_choice matches against known option labels instead of blindly splitting on every comma", async () => {
@@ -317,6 +318,7 @@ test("multiSelect user_choice matches against known option labels instead of bli
   const choices = readLog().filter((e) => e.kind === "user_choice");
   assert.equal(choices.length, 1);
   assert.deepEqual(choices[0].chosen, ["Apple", "Cherry"]);
+  assert.equal(choices[0].kind_of_answer, "option");
 });
 
 test("resolved (with Jev's own answers) arrives WHILE respondToPermission is still pending: confirmed once, never logged as user_choice", async () => {
@@ -360,6 +362,12 @@ test("resolved (with the human's DIFFERENT answer) arrives WHILE respondToPermis
 
   assert.equal(readLog().filter((e) => e.kind === "decision" && e.outcome === "answered" && e.request_id === request.id).length, 0);
   assert.equal(ctx.appended.length, 0);
+
+  // Jev did attempt an answer here (unlike a plain deferral) and lost the race — that's a distinct
+  // stat from the user_choice provenance, logged alongside it.
+  const decisions = readLog().filter((e) => e.kind === "decision" && e.request_id === request.id);
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].outcome, "race_lost");
 
   const choices = readLog().filter((e) => e.kind === "user_choice");
   assert.equal(choices.length, 1);
@@ -409,6 +417,63 @@ test("an unconfirmed answer (resolved event never arrives) is swept as unconfirm
   // The entry was evicted — a resolved event arriving even later must be a silent no-op now.
   const q = request.input.questions[0].question;
   await handlers["agent.permission_resolved"]({ agent: requestedSingle.agent, requestId: request.id, resolution: { behavior: "allow", updatedInput: { answers: { [q]: "Red" } } } }, ctx);
+  assert.equal(readLog().filter((e) => e.kind === "user_choice").length, 0);
+});
+
+test("a deferred (never-answered) request survives the short TTL and a sweep — a late human answer still logs user_choice", async () => {
+  const { server, handlers } = makeServer();
+  registerPermissionAnswerer(server);
+  const ctx = makeContext(withUserMessage);
+  const request = { ...requestedSingle.request, id: "permission-deferred-survives-sweep-test" };
+
+  delete process.env.TYPESAFE_API_KEY; // forces an immediate "no_key" defer — tracked, never answered
+  process.env.ASK_JEV_PASEO_TTL_MS = "10"; // the short (jevAnswers) TTL — must NOT apply to this entry
+  try {
+    await handlers["agent.permission_requested"]({ agent: requestedSingle.agent, request }, ctx);
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Trigger a sweep well past the short TTL; a deferred entry must not be evicted by it.
+    await handlers["agent.permission_requested"]({ agent: requestedSingle.agent, request: { ...request, id: "permission-unrelated-sweep-trigger-2", kind: "tool" } }, ctx);
+  } finally {
+    process.env.TYPESAFE_API_KEY = "tsk_test_dummy";
+    delete process.env.ASK_JEV_PASEO_TTL_MS;
+  }
+
+  const q = request.input.questions[0].question;
+  await handlers["agent.permission_resolved"]({ agent: requestedSingle.agent, requestId: request.id, resolution: { behavior: "allow", updatedInput: { answers: { [q]: "Blue" } } } }, ctx);
+
+  const choices = readLog().filter((e) => e.kind === "user_choice" && e.question === q);
+  assert.equal(choices.length, 1);
+  assert.deepEqual(choices[0].chosen, ["Blue"]);
+  // No spurious race_lost/unconfirmed for a request Jev never actually answered.
+  assert.equal(readLog().filter((e) => e.kind === "decision" && e.request_id === request.id && e.outcome !== "deferred").length, 0);
+});
+
+test("respondToPermission throwing after the answer was sent: no per-question error, resolved event still confirms it landed", async () => {
+  const { server, handlers } = makeServer();
+  registerPermissionAnswerer(server);
+  const request = { ...requestedSingle.request, id: "permission-respond-throws-test" };
+  const q = request.input.questions[0].question;
+  mockFetch(() => ({ pick: { choice: "o0", probabilities: { o0: 0.95, o1: 0.05 } }, ...SAFE_BOOLEANS }));
+  const ctx = makeContext(withUserMessage, {
+    onRespond: () => {
+      throw new Error("network blip after the daemon actually received it");
+    },
+  });
+
+  await handlers["agent.permission_requested"]({ agent: requestedSingle.agent, request }, ctx);
+
+  // No per-question "error" — we don't know yet whether it landed.
+  assert.equal(readLog().filter((e) => e.kind === "decision" && e.request_id === request.id).length, 0);
+  const diagnostics = readLog().filter((e) => e.kind === "diagnostic" && e.request_id === request.id);
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].outcome, "error");
+
+  // It turns out it DID land — the resolved event echoes our own answer back.
+  await handlers["agent.permission_resolved"]({ agent: requestedSingle.agent, requestId: request.id, resolution: { behavior: "allow", updatedInput: { answers: { [q]: "Red" } } } }, ctx);
+  const decisions = readLog().filter((e) => e.kind === "decision" && e.request_id === request.id);
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].outcome, "answered");
   assert.equal(readLog().filter((e) => e.kind === "user_choice").length, 0);
 });
 
