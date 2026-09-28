@@ -167,6 +167,21 @@ test("lib/stats.mjs: diagnostics (e.g. Paseo standdown) are excluded from decisi
   assert.equal(s.decisions.by_outcome.paseo_standdown, undefined);
 });
 
+test("lib/stats.mjs: CLI decisions group under gate \"cli\", separate from and not skewing other gates' rates", () => {
+  const events = [
+    { kind: "decision", gate: "ask", outcome: "answered" },
+    { kind: "decision", gate: "ask", outcome: "personal" },
+    { kind: "decision", gate: "cli", outcome: "true" },
+    { kind: "decision", gate: "cli", outcome: "a" },
+  ];
+  const s = computeStats(events);
+  assert.equal(s.decisions.total, 4);
+  assert.deepEqual(s.decisions.by_gate.ask, { total: 2, positive: 1, by_outcome: { answered: 1, personal: 1 } });
+  assert.deepEqual(s.decisions.by_gate.cli, { total: 2, positive: 0, by_outcome: { true: 1, a: 1 } });
+  // ask's own positive/total (1/2) is untouched by the two cli decisions
+  assert.equal(s.decisions.by_gate.ask.positive / s.decisions.by_gate.ask.total, 0.5);
+});
+
 test("lib/jev.mjs: askJev retries 5xx until success within budget, logs retried + attempts", async () => {
   let calls = 0;
   const server = createServer((req, res) => {
@@ -494,6 +509,8 @@ test("cli decision logging: boolean question logs question/question_text/options
 
   const d = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l))
     .filter((e) => e.kind === "decision" && e.source === "cli" && e.question === "ok").at(-1);
+  assert.equal(d.gate, "cli");
+  assert.equal(d.outcome, "true"); // 0.9 >= 0.5 cut
   assert.equal(d.question_text, "Is this ok?");
   assert.deepEqual(d.options.sort(), ["false", "true"]);
   assert.ok(Math.abs(d.result - 0.9) < 1e-9);
@@ -513,6 +530,8 @@ test("cli decision logging: choice question logs {choice, probability} as result
 
   const d = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l))
     .filter((e) => e.kind === "decision" && e.source === "cli" && e.question === "pick").at(-1);
+  assert.equal(d.gate, "cli");
+  assert.equal(d.outcome, "a");
   assert.equal(d.question_text, "Pick one");
   assert.deepEqual(d.options.sort(), ["a", "b"]);
   assert.deepEqual(d.result, { choice: "a", probability: 0.7 });

@@ -29,6 +29,16 @@ function cliConfidence(q, answer) {
   return undefined;
 }
 
+// outcome cho lib/stats.mjs: boolean/noul cắt ở 0.5 ra "true"/"false", choice là chính lựa chọn
+// đã pick — để computeStats gom decision CLI vào gate riêng ("cli") thay vì rơi vào "unknown"
+// và lẫn vào by_outcome/positive_pct của các gate khác.
+function cliOutcome(q, answer) {
+  if (!answer) return undefined;
+  if (q.type === "boolean" || q.type === "noul") return typeof answer.probability === "number" ? (answer.probability >= 0.5 ? "true" : "false") : undefined;
+  if (q.type === "choice") return answer.choice;
+  return undefined;
+}
+
 // Kích thước từng field top-level của state, giống buildState() bên hook — rẻ vì chỉ
 // stringify một lần mỗi field, không phải toàn bộ cây lặp lại.
 function cliStateSizes(state) {
@@ -118,9 +128,11 @@ async function main() {
       logEvent({
         kind: "decision",
         source: "cli",
+        gate: "cli",
         question: name,
         question_text: truncate(questionText, 4000),
         options: Object.keys(q.criteria ?? {}),
+        outcome: cliOutcome(q, answers[name]),
         result: cliResult(q, answers[name]),
         confidence: cliConfidence(q, answers[name]),
         ...(sizes ? { state_sizes: sizes } : {}),

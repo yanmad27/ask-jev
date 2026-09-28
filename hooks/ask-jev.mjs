@@ -189,8 +189,11 @@ async function main() {
     .filter(Boolean);
   if (resolved.length === 0) return;
 
-  const chosenLines = resolved.map((r) => `Jev chose "${r.label}" (${r.confidence.toFixed(2)})`);
-  const answered = chosenLines.join("\n");
+  // Reason (model-facing) giữ mapping câu hỏi ↔ lựa chọn — nhiều câu trong một request thì
+  // Claude cần biết Jev chọn gì cho câu nào. systemMessage (người dùng thấy) thì ngắn, không
+  // cần lặp lại câu hỏi.
+  const shortLines = resolved.map((r) => `Jev chose "${r.label}" (${r.confidence.toFixed(2)})`);
+  const answered = resolved.map((r) => `"${r.question}" → Jev chose "${r.label}" (${r.confidence.toFixed(2)})`).join("\n");
   const unresolved = questions.filter((_, i) => !results[i]?.label).map((q) => `"${q.question}"`);
 
   // Đây không phải lỗi: Claude Code chỉ có permissionDecision "deny" để đưa văn bản
@@ -207,7 +210,7 @@ async function main() {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
       permissionDecisionReason: reason,
-      systemMessage: chosenLines.join("; "),
+      systemMessage: shortLines.join("; "),
     },
   }));
 }

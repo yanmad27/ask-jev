@@ -107,3 +107,59 @@ test("interpretMulti: a mid-band option leaves the whole question unresolved", (
   const answers = { personal: { probability: 0.1 }, destructive: { probability: 0.1 }, o0: { probability: 0.9 }, o1: { probability: 0.5 } };
   assert.equal(interpretMulti(answers, opts, { autonomy: "full", threshold: T }).outcome, "low_confidence");
 });
+
+// --- Fail-closed on malformed/partial Jev responses: never auto-answer on missing data ---
+
+for (const autonomy of ["safe", "full"]) {
+  test(`interpretPick (${autonomy}): missing destructive fails closed to "destructive"`, () => {
+    const answers = { pick: { choice: "o0", probabilities: { o0: 0.99 } }, personal: { probability: 0.1 } };
+    assert.deepEqual(interpretPick(answers, opts, { autonomy, threshold: T }), { outcome: "destructive" });
+  });
+
+  test(`interpretMulti (${autonomy}): missing destructive fails closed to "destructive"`, () => {
+    const answers = { personal: { probability: 0.1 }, o0: { probability: 0.9 }, o1: { probability: 0.05 } };
+    assert.deepEqual(interpretMulti(answers, opts, { autonomy, threshold: T }), { outcome: "destructive" });
+  });
+
+  test(`interpretPick (${autonomy}): missing pick/choice/probabilities all defer with outcome "error"`, () => {
+    const base = { personal: { probability: 0.1 }, destructive: { probability: 0.1 } };
+    assert.equal(interpretPick(base, opts, { autonomy, threshold: T }).outcome, "error"); // no pick at all
+    assert.equal(interpretPick({ ...base, pick: {} }, opts, { autonomy, threshold: T }).outcome, "error"); // no choice
+    assert.equal(interpretPick({ ...base, pick: { choice: "o0" } }, opts, { autonomy, threshold: T }).outcome, "error"); // no probabilities
+    assert.equal(interpretPick({ ...base, pick: { choice: "o0", probabilities: { o1: 0.9 } } }, opts, { autonomy, threshold: T }).outcome, "error"); // choice missing from probabilities
+    assert.equal(interpretPick({ ...base, pick: { choice: "o9", probabilities: { o9: 0.9 } } }, opts, { autonomy, threshold: T }).outcome, "error"); // choice out of range of options
+  });
+
+  test(`interpretMulti (${autonomy}): a missing per-option probability defers with outcome "error"`, () => {
+    const answers = { personal: { probability: 0.1 }, destructive: { probability: 0.1 }, o0: { probability: 0.9 } }; // o1 missing
+    assert.equal(interpretMulti(answers, opts, { autonomy, threshold: T }).outcome, "error");
+  });
+}
+
+test('interpretPick: missing personal defaults to probability 1 (assume personal, the safe side) — safe mode defers', () => {
+  const answers = { pick: { choice: "o0", probabilities: { o0: 0.99 } }, destructive: { probability: 0.1 } };
+  assert.deepEqual(interpretPick(answers, opts, { autonomy: "safe", threshold: T }), { outcome: "personal" });
+});
+
+test("interpretPick: missing personal in full autonomy still requires grounding — missing grounded errors, present+confident answers", () => {
+  const base = { pick: { choice: "o0", probabilities: { o0: 0.95 } }, destructive: { probability: 0.1 } }; // personal omitted
+  assert.equal(interpretPick(base, opts, { autonomy: "full", threshold: T }).outcome, "error"); // grounded missing too
+
+  const grounded = interpretPick({ ...base, grounded: { probability: 0.9 } }, opts, { autonomy: "full", threshold: T });
+  assert.equal(grounded.outcome, "answered");
+  assert.equal(grounded.label, "A");
+});
+
+test("interpretMulti: missing personal defaults to probability 1 — safe defers, full without grounded errors", () => {
+  const answers = { destructive: { probability: 0.1 }, o0: { probability: 0.9 }, o1: { probability: 0.05 } }; // personal omitted
+  assert.deepEqual(interpretMulti(answers, opts, { autonomy: "safe", threshold: T }), { outcome: "personal" });
+  assert.equal(interpretMulti(answers, opts, { autonomy: "full", threshold: T }).outcome, "error");
+});
+
+test("interpretPick/interpretMulti: personal present but grounded missing in full autonomy errors, not auto-answers", () => {
+  const pickAnswers = { pick: { choice: "o0", probabilities: { o0: 0.95 } }, personal: { probability: 0.9 }, destructive: { probability: 0.1 } };
+  assert.equal(interpretPick(pickAnswers, opts, { autonomy: "full", threshold: T }).outcome, "error");
+
+  const multiAnswers = { personal: { probability: 0.9 }, destructive: { probability: 0.1 }, o0: { probability: 0.9 }, o1: { probability: 0.05 } };
+  assert.equal(interpretMulti(multiAnswers, opts, { autonomy: "full", threshold: T }).outcome, "error");
+});
