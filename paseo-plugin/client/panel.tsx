@@ -9,14 +9,15 @@ const POLL_MS = 2000;
 
 type Row = JevStats["recent"][number];
 
-/** Stable identity for a row across polls — never the array index, which shifts as new lines arrive. */
-function rowKey(row: Pick<Row, "ts" | "gate" | "question">): string {
-  return JSON.stringify([row.ts, row.gate ?? "", row.question]);
+/** Stable identity for a row across polls — never the array index, which shifts as new lines arrive.
+ * Prefers event_id (every row has one since lib/jev.mjs started stamping it); old rows fall back to ts+gate. */
+function rowKey(row: Pick<Row, "event_id" | "ts" | "gate" | "question">): string {
+  return JSON.stringify([row.event_id ?? "", row.ts, row.gate ?? "", row.question]);
 }
 
-function parseRowKey(key: string): { ts: string; gate?: string } {
-  const [ts, gate] = JSON.parse(key) as [string, string, string];
-  return { ts, gate: gate || undefined };
+function parseRowKey(key: string): { event_id?: string; ts: string; gate?: string } {
+  const [eventId, ts, gate] = JSON.parse(key) as [string, string, string, string];
+  return { event_id: eventId || undefined, ts, gate: gate || undefined };
 }
 
 function monospace(platform: "ios" | "android" | "web"): string {
@@ -177,7 +178,7 @@ export function AskJevPanel({ theme, layout, workspaceId }: PluginWorkspacePanel
                   {item.question}
                 </Text>
                 <Text style={[styles.cell, styles.colAnswer]} numberOfLines={1}>
-                  {item.label ? `${item.label}${item.confidence != null ? ` ${item.confidence.toFixed(2)}` : ""}` : "—"}
+                  {formatAnswer(item)}
                 </Text>
                 <Text style={[styles.cell, styles.colReason, styles.muted]} numberOfLines={1}>
                   {item.reason ?? "—"}
@@ -251,6 +252,14 @@ function Chip({ styles, active, label, onPress }: { styles: Styles; active: bool
       <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
     </Pressable>
   );
+}
+
+/** Plugin-sourced decisions render as `Jev chose "X" (0.93)`; everything else keeps the plain label. */
+function formatAnswer(item: Row): string {
+  if (!item.label) return "—";
+  const confidence = item.confidence != null ? ` (${item.confidence.toFixed(2)})` : "";
+  if (item.source === "paseo" && item.outcome === "answered") return `Jev chose "${item.label}"${confidence}`;
+  return `${item.label}${confidence}`;
 }
 
 function formatTime(ts: string): string {

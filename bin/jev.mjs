@@ -4,12 +4,50 @@
  * in `answers` thô ra stdout. Dùng bởi skill ask-jev, hoặc trực tiếp.
  */
 import { readFileSync } from "node:fs";
-import { apiKey, askJev, logFilePath, requestError, NOT_CHAT } from "../lib/jev.mjs";
+import { apiKey, askJev, logEvent, logFilePath, requestError, NOT_CHAT } from "../lib/jev.mjs";
+import { truncate } from "../lib/gate.mjs";
 import { computeStats, filterSince, parseEvents, recentDecisions, sinceMsFromSpec } from "../lib/stats.mjs";
 
 function fail(message) {
   process.stderr.write(`jev: ${message}\n`);
   process.exit(1);
+}
+
+// result: boolean/noul → probability thô; choice → {choice, probability của lựa chọn đó};
+// type khác (vd score) → answer nguyên văn, vì chưa có quy ước rút gọn.
+function cliResult(q, answer) {
+  if (!answer) return undefined;
+  if (q.type === "boolean" || q.type === "noul") return answer.probability;
+  if (q.type === "choice") return { choice: answer.choice, probability: answer.probabilities?.[answer.choice] };
+  return answer;
+}
+
+function cliConfidence(q, answer) {
+  if (!answer) return undefined;
+  if (q.type === "boolean" || q.type === "noul") return answer.confidence;
+  if (q.type === "choice") return answer.probabilities?.[answer.choice];
+  return undefined;
+}
+
+// outcome cho lib/stats.mjs: boolean/noul cắt ở 0.5 ra "true"/"false", choice là chính lựa chọn
+// đã pick — để computeStats gom decision CLI vào gate riêng ("cli") thay vì rơi vào "unknown"
+// và lẫn vào by_outcome/positive_pct của các gate khác.
+function cliOutcome(q, answer) {
+  if (!answer) return undefined;
+  if (q.type === "boolean" || q.type === "noul") return typeof answer.probability === "number" ? (answer.probability >= 0.5 ? "true" : "false") : undefined;
+  if (q.type === "choice") return answer.choice;
+  return undefined;
+}
+
+// Kích thước từng field top-level của state, giống buildState() bên hook — rẻ vì chỉ
+// stringify một lần mỗi field, không phải toàn bộ cây lặp lại.
+function cliStateSizes(state) {
+  if (!state || typeof state !== "object" || Array.isArray(state)) return undefined;
+  try {
+    return Object.fromEntries(Object.entries(state).map(([k, v]) => [k, JSON.stringify(v).length]));
+  } catch {
+    return undefined;
+  }
 }
 
 function stats(args) {
@@ -83,6 +121,23 @@ async function main() {
   try {
     const answers = await askJev(key, input.state, input.questions);
     process.stdout.write(JSON.stringify(answers));
+
+    const sizes = cliStateSizes(input.state);
+    for (const [name, q] of Object.entries(input.questions)) {
+      const questionText = typeof q.instructions === "string" ? q.instructions : q.instructions?.question ?? "";
+      logEvent({
+        kind: "decision",
+        source: "cli",
+        gate: "cli",
+        question: name,
+        question_text: truncate(questionText, 4000),
+        options: Object.keys(q.criteria ?? {}),
+        outcome: cliOutcome(q, answers[name]),
+        result: cliResult(q, answers[name]),
+        confidence: cliConfidence(q, answers[name]),
+        ...(sizes ? { state_sizes: sizes } : {}),
+      });
+    }
   } catch (err) {
     return fail(err.message);
   }

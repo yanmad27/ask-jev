@@ -21,6 +21,7 @@
   "include": [
     "**/*.ts",
     "**/*.tsx",
-    "shared/stats.mjs"
+    "shared/*.mjs",
+    "server/vendor/*.mjs"
   ]
 }

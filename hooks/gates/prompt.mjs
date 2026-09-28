@@ -7,7 +7,7 @@ import { enabled, readStdinJson, FOCUS, truncate, autonomy } from "../../lib/gat
 import { env } from "../../lib/env.mjs";
 
 const jevPath = fileURLToPath(new URL("../../bin/jev.mjs", import.meta.url));
-const REMINDER = `Reminder: before classifying / choosing among options / yes-no on evidence, ask Jev: echo '<json>' | node "${jevPath}" with <json> = ${REQUEST_SHAPE}; ${CRITERIA_SHAPE}. ${NOT_CHAT} (skill ask-jev). Personal taste or irreversible actions → ask the user. When the user defers a choice to you/Jev, ask Jev which option the user would pick — no "undetermined" option. Never write your own description of the user into state — only raw evidence. In full autonomy: do not ask the user; state assumptions and proceed unless destructive.`;
+const REMINDER = `Reminder: before classifying / choosing among options / yes-no on evidence, ask Jev: echo '<json>' | node "${jevPath}" with <json> = ${REQUEST_SHAPE}; ${CRITERIA_SHAPE}. ${NOT_CHAT} (skill ask-jev). Verify checkable facts first (read-only tool/command), state = the verbatim result — never ask "did you do X" if checkable. Irreversible/destructive → always the user. Taste: ask Jev which option the user would pick, state = their words/past choices verbatim; grounded only, else the user. Report every Jev choice: \`Jev chose "X" (0.93)\`. Never write your own description of the user into state — only raw evidence. In full autonomy: do not ask the user; state assumptions and proceed unless destructive.`;
 
 const AMBIGUOUS = {
   true: "Multiple materially different readings that would change the work",

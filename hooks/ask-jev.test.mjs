@@ -54,6 +54,19 @@ test("Paseo: hook stands down entirely when PASEO_AGENT_ID is set, even for a co
   assert.equal(stdout.trim(), "", "under Paseo the hook must emit no permissionDecision");
 });
 
+test("Paseo standdown is logged as kind:\"diagnostic\", not a decision", async () => {
+  const sessionId = `paseo-diag-${Math.random()}`;
+  const stdout = await runRaw(
+    { tool_name: "AskUserQuestion", session_id: sessionId, transcript_path: transcript, tool_input: { questions: [{ question: "Stack?", options: opts }] } },
+    "http://127.0.0.1:1", // never reached — hook stands down before any network call
+    { PASEO_AGENT_ID: "paseo-agent-2" },
+  );
+  assert.equal(stdout.trim(), "");
+  const diag = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.session_id === sessionId).at(-1);
+  assert.equal(diag.kind, "diagnostic");
+  assert.equal(diag.outcome, "paseo_standdown");
+});
+
 test("partial answers: resolved question denies, unresolved re-asked", async () => {
   const server = await stub(({ state, questions }) => (questions.pick
     ? { pick: { choice: "o0", probabilities: { o0: state.pendingQuestion === "Resolved?" ? 0.95 : 0.5 } }, personal: { probability: 0.1 }, destructive: { probability: 0.1 } }
@@ -65,7 +78,7 @@ test("partial answers: resolved question denies, unresolved re-asked", async () 
   }, `http://127.0.0.1:${server.address().port}`);
   server.close();
   const reason = out.hookSpecificOutput.permissionDecisionReason;
-  assert.match(reason, /"Resolved\?" → A/);
+  assert.match(reason, /Jev chose "A" \(/);
   assert.match(reason, /Re-ask the user ONLY the unresolved question/);
   assert.match(reason, /"Unresolved\?"/);
 
@@ -87,7 +100,7 @@ test("multiSelect: decisive per-option answers join into one label", async () =>
     tool_input: { questions: [{ question: "Pick features", multiSelect: true, options: opts }] },
   }, `http://127.0.0.1:${server.address().port}`);
   server.close();
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /"Pick features" → A \(/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /Jev chose "A" \(/);
 });
 
 test("duplicate call is silent: one gateway request, one decision line", async () => {
@@ -142,6 +155,38 @@ test("lib/stats.mjs: computeStats reports per-gate positive/fallback rates", () 
   assert.equal(s.decisions.positive_pct, 50);
   // fallback: ask/personal (non-answered) + permission/ask = 2 of 6
   assert.equal(s.decisions.fallback_pct, (2 / 6) * 100);
+});
+
+test("lib/stats.mjs: diagnostics (e.g. Paseo standdown) are excluded from decision totals", () => {
+  const events = [
+    { kind: "decision", gate: "ask", outcome: "answered" },
+    { kind: "diagnostic", gate: "ask", outcome: "paseo_standdown" },
+  ];
+  const s = computeStats(events);
+  assert.equal(s.decisions.total, 1);
+  assert.equal(s.decisions.by_outcome.paseo_standdown, undefined);
+});
+
+test("lib/stats.mjs: CLI decisions are visible in by_gate but excluded from the overall total/by_outcome/rates", () => {
+  const events = [
+    { kind: "decision", gate: "ask", outcome: "answered" },
+    { kind: "decision", gate: "ask", outcome: "personal" },
+    { kind: "decision", gate: "cli", outcome: "true" },
+    { kind: "decision", gate: "cli", outcome: "a" },
+  ];
+  const s = computeStats(events);
+  // overall total/by_outcome only count the ask decisions — cli isn't a "hỏi hộ" funnel gate
+  assert.equal(s.decisions.total, 2);
+  assert.deepEqual(s.decisions.by_outcome, { answered: 1, personal: 1 });
+  assert.equal(s.decisions.by_outcome.true, undefined);
+  assert.equal(s.decisions.by_outcome.a, undefined);
+  // percentages are computed over the 2 ask decisions, not diluted by the 2 cli ones
+  assert.equal(s.decisions.positive_pct, 50);
+  assert.equal(s.decisions.fallback_pct, 50);
+
+  // cli still shows up in by_gate with its own count and outcomes
+  assert.deepEqual(s.decisions.by_gate.ask, { total: 2, positive: 1, by_outcome: { answered: 1, personal: 1 } });
+  assert.deepEqual(s.decisions.by_gate.cli, { total: 2, positive: 0, by_outcome: { true: 1, a: 1 } });
 });
 
 test("lib/jev.mjs: askJev retries 5xx until success within budget, logs retried + attempts", async () => {
@@ -222,6 +267,30 @@ test("lib/jev.mjs: a hanging gateway response stays within the requested budget"
   assert.ok(elapsed < budgetMs + 500, `expected well under budgetMs=${budgetMs}, got ${elapsed}ms`);
 });
 
+test("lib/jev.mjs: logEvent stamps every line with a unique event_id", async () => {
+  const script = "import('./lib/jev.mjs').then(({logEvent}) => { logEvent({kind:'event_id_test'}); logEvent({kind:'event_id_test'}); });";
+  await execFileAsync("node", ["-e", script], { env: { ...cleanEnv(), ASK_JEV_LOG_FILE: logFile } });
+  const lines = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "event_id_test");
+  assert.equal(lines.length, 2);
+  assert.match(lines[0].event_id, /^[0-9a-f-]{36}$/);
+  assert.match(lines[1].event_id, /^[0-9a-f-]{36}$/);
+  assert.notEqual(lines[0].event_id, lines[1].event_id);
+});
+
+test("lib/jev.mjs: askJev accepts explicit metadata that overrides process-derived agent/repo", async () => {
+  const { server, url } = await recorder([[200, {}, { answers: { ok: { probability: 0.5 } } }]]);
+  const script = "import('./lib/jev.mjs').then(async ({askJev}) => { "
+    + "await askJev('dummy', {x:1}, {ok:{type:'boolean',instructions:{question:'q'},criteria:{true:'t',false:'f'}}}, 'test-meta', 4000, undefined, "
+    + "{agent: 'plugin-agent', repo: 'github.com/example/plugin-repo', session_id: 'plugin-session', request_id: 'req-1'}); });";
+  await execFileAsync("node", ["-e", script], { env: { ...cleanEnv(), ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile } });
+  server.close();
+  const call = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.source === "test-meta").at(-1);
+  assert.equal(call.agent, "plugin-agent");
+  assert.equal(call.repo, "github.com/example/plugin-repo");
+  assert.equal(call.session_id, "plugin-session");
+  assert.equal(call.request_id, "req-1");
+});
+
 // --- Bidirectional mirror reconciliation: personal/destructive must stay conservative under contradiction ---
 
 async function runRawEnv(input, url, extraEnv) {
@@ -255,7 +324,7 @@ test("bidirectional: destructive agreement (low) still lets a confident answer t
   }));
   const out = await runHook({ tool_name: "AskUserQuestion", session_id: `dok-${Math.random()}`, transcript_path: transcript, tool_input: { questions: [{ question: "Rename var?", options: opts }] } }, `http://127.0.0.1:${server.address().port}`);
   server.close();
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /"Rename var\?" → A/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /Jev chose "A" \(/);
 });
 
 test("bidirectional (safe mode): personal forward/mirror contradiction still defers to the user", async () => {
@@ -398,7 +467,7 @@ test("hook end-to-end on typesafe: a noul-only answer drives the decision via pr
   const out = JSON.parse(await runRawEnv({ tool_name: "AskUserQuestion", session_id: `ts-${Math.random()}`, transcript_path: transcript, tool_input: { questions: [{ question: "TS?", options: opts }] } }, url, { ASK_JEV_API_KEY: "tsk_abc" }));
   server.close();
   assert.equal(seen[0].body.model, "jev-latest");
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /"TS\?" → A/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /Jev chose "A" \(/);
 });
 
 test("provider/endpoint: defaults per provider, inference, legacy var, case-insensitive and unknown ASK_JEV_PROVIDER", () => {
@@ -435,6 +504,45 @@ test("cli on typesafe: boolean answer is exactly {probability, confidence} — n
   assert.deepEqual(Object.keys(a.ok).sort(), ["confidence", "probability"]);
   assert.ok(Math.abs(a.ok.probability - 0.9) < 1e-9);
   assert.ok(Math.abs(a.ok.confidence - 0.9) < 1e-9);
+});
+
+test("cli decision logging: boolean question logs question/question_text/options/result/confidence, stdout unaffected", async () => {
+  const { server, url } = await recorder([[200, {}, { model: "jev-1.13.0", answers: { ok: { type: "noul", noul: 0.9 }, ok__mirror: { type: "noul", noul: 0.1 } } }]]);
+  const run = execFileAsync("node", ["bin/jev.mjs"], { env: { ...cleanEnv(), TYPESAFE_API_KEY: "tsk_abc", ASK_JEV_API_URL: url, ASK_JEV_LOG_FILE: logFile } });
+  run.child.stdin.end(JSON.stringify({ state: { x: 1 }, questions: { ok: { type: "boolean", instructions: { question: "Is this ok?" }, criteria: { true: "t", false: "f" } } } }));
+  const { stdout } = await run;
+  server.close();
+  assert.deepEqual(JSON.parse(stdout), { ok: { probability: 0.9, confidence: 0.9 } }); // stdout byte-shape unchanged by logging
+
+  const d = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l))
+    .filter((e) => e.kind === "decision" && e.source === "cli" && e.question === "ok").at(-1);
+  assert.equal(d.gate, "cli");
+  assert.equal(d.outcome, "true"); // 0.9 >= 0.5 cut
+  assert.equal(d.question_text, "Is this ok?");
+  assert.deepEqual(d.options.sort(), ["false", "true"]);
+  assert.ok(Math.abs(d.result - 0.9) < 1e-9);
+  assert.ok(Math.abs(d.confidence - 0.9) < 1e-9);
+});
+
+test("cli decision logging: choice question logs {choice, probability} as result", async () => {
+  const { server, url } = await recorder([[200, {}, { answers: { pick: { choice: "a", probabilities: { a: 0.7, b: 0.3 } } } }]]);
+  const run = execFileAsync("node", ["bin/jev.mjs"], { env: { ...cleanEnv(), ASK_JEV_API_KEY: "vck_dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile } });
+  run.child.stdin.end(JSON.stringify({
+    state: { x: 1 },
+    questions: { pick: { type: "choice", instructions: { question: "Pick one" }, criteria: { a: { what: "A" }, b: { what: "B" } } } },
+  }));
+  const { stdout } = await run;
+  server.close();
+  assert.deepEqual(JSON.parse(stdout), { pick: { choice: "a", probabilities: { a: 0.7, b: 0.3 } } });
+
+  const d = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l))
+    .filter((e) => e.kind === "decision" && e.source === "cli" && e.question === "pick").at(-1);
+  assert.equal(d.gate, "cli");
+  assert.equal(d.outcome, "a");
+  assert.equal(d.question_text, "Pick one");
+  assert.deepEqual(d.options.sort(), ["a", "b"]);
+  assert.deepEqual(d.result, { choice: "a", probability: 0.7 });
+  assert.equal(d.confidence, 0.7);
 });
 
 test("401 hint on the vercel path when the key is not a Vercel key", async () => {

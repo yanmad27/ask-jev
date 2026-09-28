@@ -61,6 +61,19 @@ test("buildState: compaction summary excluded from task/conversation, TodoWrite 
   assert.equal(state.task.current_task, "now do Z");
 });
 
+test("buildState: transcriptRows accepts conversation rows directly (no transcriptPath needed), same filtering as the file path", async () => {
+  const home = tmpHome();
+  const cwd = mkdtempSync(join(tmpdir(), "ctx-cwd-rows-"));
+  const rows = [
+    { type: "user", message: { content: "hello from rows" } },
+    { type: "user", isSidechain: true, message: { content: "should be filtered (sidechain)" } },
+    { type: "assistant", message: { content: "hi" } },
+  ];
+  const { state } = await callBuildState({ transcriptRows: rows, cwd }, home);
+  assert.equal(state.task.current_task, "hello from rows");
+  assert.ok(!state.conversation.turns.some((t) => t.includes("should be filtered")));
+});
+
 test("buildState: settings.json allow rules surface as permissions.allow", async () => {
   const home = tmpHome();
   writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ permissions: { allow: ["Bash(npm test)"] } }));

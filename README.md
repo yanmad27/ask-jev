@@ -86,23 +86,52 @@ Four pieces, layered on top of each other:
 Before Claude Code shows you a question, ask-jev sends it to Jev with two
 things to judge:
 
-1. **Is this even your call to make?** Taste, private priorities, or
-   anything irreversible (delete, send, publish, spend money) — Jev refuses
-   to touch these, no matter how obvious the "right" answer looks.
+1. **Is this even your call to make?** Anything irreversible (delete, send,
+   publish, spend money) always reaches you — Jev never touches it, no
+   matter how obvious the "right" answer looks. Taste and personal
+   preference are different: Jev answers those too, but only when
+   **grounded** — your own messages or real past choices point to a specific
+   option (see [Autonomy](#4-autonomy) for `safe` mode, where taste always
+   reaches you instead).
 2. **If it's not, which option is correct** — given everything said so far in
    the conversation?
 
-Only when Jev is both confident *and* sure the question isn't personal does
-Claude get the answer silently and move on. Otherwise the question reaches
-you exactly as if ask-jev weren't installed.
+Only when Jev is both confident *and* (not personal, or grounded in your own
+evidence) does Claude get the answer silently and move on. Otherwise the
+question reaches you exactly as if ask-jev weren't installed.
 
-**In [Paseo](#in-paseo) this hook stands down.** Paseo turns `AskUserQuestion`
-into a native question you answer in the app, and a Claude Code hook can only
-"answer" one by denying the tool — which Paseo shows as a red `hook error`
-even though the answer still reaches the model. So inside Paseo (detected via
-`PASEO_AGENT_ID`) the auto-answer hook stays silent and every question reaches
-you normally. Asking Jev directly for judgement calls (below) is CLI-based and
-works everywhere; the stats panel keeps recording.
+**In [Paseo](#in-paseo), install the [Paseo plugin](paseo-plugin/README.md)
+and it answers natively — no hook, no red `hook error`.** The plugin listens
+for the permission request itself and replies with `respondToPermission`
+directly, instead of a Claude Code hook denying the tool. A request with
+several questions is all-or-nothing: if Jev defers even one of them, the
+whole request reaches you unanswered, never a partial answer. An answer Jev
+gives is reported in the agent's timeline as `Jev chose "X" (0.93)` only once
+Paseo's own resolution event confirms it actually took effect — a stale
+respond to an already-resolved request "succeeds" without landing, so
+succeeding isn't proof. One that's never confirmed within a bounded wait is
+logged as `unconfirmed` instead, with no timeline entry.
+Claude Code's own `AskUserQuestion` hook still stands down under
+`PASEO_AGENT_ID` either way (logged as a `diagnostic`, not a `decision`, so
+it never skews the stats), so the two never fight over the same question.
+Without the plugin installed, every question in Paseo reaches you normally
+instead — asking Jev directly for judgement calls (below) is CLI-based and
+works either way; the stats panel keeps recording.
+
+**Known limit:** Paseo's resolution event carries no responder identity,
+only the final answer — so if you happen to answer, within that ~1 RPC
+round-trip window, with exactly the option(s) Jev had picked, it's logged
+and reported as a Jev answer rather than a `user_choice`. The reverse never
+happens: a Jev answer is never logged as a `user_choice`.
+
+The plugin needs the same Jev API key as the hooks — `~/.claude/ask-jev.key`,
+or `TYPESAFE_API_KEY`/`ASK_JEV_API_KEY` — but it's read from the **Paseo
+daemon's** own environment and home directory, not the shell you happen to
+be typing in. If you only export the key in a shell rc, the daemon may never
+see it; the key file sidesteps that. Install only **one** copy of the
+plugin: two copies loaded in the same process (e.g. `ask-jev` and a local
+`ask-jev-dev`) share an in-memory dedupe map so they won't both answer the
+same request, but there's no reason to run two.
 
 <details>
 <summary>Options need real definitions, multiSelect, and when it stays silent</summary>
@@ -141,7 +170,8 @@ comma-joined list of selected labels — possibly "none".
 
 | Condition | Why |
 |---|---|
-| the question is personal (`personal > 0.5`) | that's your call, not the model's |
+| personal and `safe` autonomy (`personal > 0.5`) | that's your call, not the model's |
+| personal in `full` autonomy but ungrounded or low-confidence (`grounded` or pick `< ASK_JEV_ASK_THRESHOLD`) | no real evidence you'd pick a specific option — a generic prior isn't grounding |
 | Jev isn't confident enough (`< ASK_JEV_ASK_THRESHOLD`) | guessing is worse than asking |
 | an option has no description | a bare label isn't something Jev can judge — bounced back to Claude, not forwarded to Jev |
 | no usable context in the transcript | nothing for Jev to judge against |
@@ -337,10 +367,12 @@ hands the decision to you, full autonomy or not.
 
 What changes in `full`:
 
-- **`AskUserQuestion`** — the `personal` check (is this the user's call?) no
-  longer causes a fallback by itself; only `destructive` does. A question
-  Jev is confident about gets answered even if it reads as a personal
-  preference, as long as it isn't destructive.
+- **`AskUserQuestion`** — a personal/taste question is no longer an automatic
+  fallback by itself. Jev also checks whether the pick is `grounded` — your
+  own messages or real past choices support a specific option — and answers
+  only when both `grounded` and the pick's own confidence clear the
+  threshold; otherwise it defers as `ungrounded_personal`. `destructive`
+  still forces a defer regardless of grounding.
 - **`prompt` gate** — an ambiguous prompt never turns into "ask the user."
   Instead Jev judges whether the literal reading is actionable: if so,
   Claude proceeds and states its assumption in one line; if not, Claude
@@ -390,13 +422,24 @@ under the old name.
 
 ## Usage analytics
 
-Every API call and every hook decision is appended as one JSON line to
+Every API call and every decision — a gate, a Paseo answer, or a direct CLI
+call to `bin/jev.mjs` — is appended as one JSON line to
 `~/.claude/ask-jev.log` (override the path with `ASK_JEV_LOG_FILE`, disable
-entirely with `ASK_JEV_LOG=0`). Each decision line carries which `gate` produced
-it (`ask`, `permission`, `stop`, `bash`, `prompt`), Jev's answer as a
-`label` + `confidence`, and a short `reason` — the criterion text Jev
-matched, never the conversation transcript or the `state` payload sent to
-Jev.
+entirely with `ASK_JEV_LOG=0`). Every line carries a unique `event_id`. Each
+gate decision line carries which `gate` produced it (`ask`, `permission`,
+`stop`, `bash`, `prompt`, `cli`), Jev's answer as a `label` + `confidence`,
+and a short `reason` — the criterion text Jev matched, never the conversation
+transcript or the `state` payload sent to Jev; a direct `bin/jev.mjs` call
+logs the same shape per question under `gate:"cli"` (`question`, `options`,
+`outcome`, `result`, `confidence`) — visible in `decisions.by_gate.cli`, but
+excluded from the overall total, `by_outcome`, and the two percentages below,
+since a standalone CLI call isn't a question that got answered instead of
+reaching you. A [Paseo](#in-paseo) standdown is logged as
+`kind:"diagnostic"`, not `"decision"`, so it never counts toward the totals
+below. Only a real human answer is ever logged as `kind:"user_choice"` —
+from a plain Claude Code `AskUserQuestion` (a `PostToolUse` hook) or from you
+answering directly in Paseo when Jev deferred; Jev's own answers are always
+logged as `"decision"`, never `"user_choice"`.
 
 Inspect it with:
 
@@ -449,8 +492,9 @@ For a live dashboard instead of a script, install the
 [Paseo plugin](paseo-plugin/README.md) — a workspace panel with stat tiles,
 a gate filter alongside the outcome breakdown, and a live-updating decisions
 table (Time, Gate, Outcome, Question/Subject, Answer, Reason). Click a row
-for the full record. Settings → Plugins → paste into "Plugin source" →
-Install:
+for the full record. The same plugin also answers `AskUserQuestion` natively
+(see [above](#1-auto-answer-askuserquestion)) — one install covers both.
+Settings → Plugins → paste into "Plugin source" → Install:
 
 ```
 github:yanmad27/ask-jev:paseo-plugin
@@ -460,21 +504,14 @@ github:yanmad27/ask-jev:paseo-plugin
 
 ### Claude Code
 
-1. Refresh the marketplace:
+In a terminal, **not** inside a Claude Code session:
 
-   ```
-   /plugin marketplace update ask-jev
-   ```
+```bash
+claude plugin update ask-jev@ask-jev
+```
 
-2. Update the plugin — in a terminal, **not** inside a Claude Code session:
-
-   ```bash
-   claude plugin update ask-jev@ask-jev
-   ```
-
-   (There is no `/plugin update` slash command; inside a session `/plugin
-   marketplace update` only refreshes the catalog. Auto-update also picks up
-   new versions in the background if it's enabled for the marketplace.)
+(There is no `/plugin update` slash command. Auto-update also picks up new
+versions in the background if it's enabled for the marketplace.)
 
 The key file was renamed `jev-ask.key` → `ask-jev.key`; the old name is still
 read as a fallback, so there's nothing to migrate. Restart Claude Code after
@@ -496,6 +533,12 @@ instead of GitHub, so edits apply immediately with no push-then-update cycle:
 Commits follow [Conventional Commits](https://www.conventionalcommits.org)
 (`feat:`/`fix:`/`docs:`…) — release-please opens a release PR that bumps
 `plugin.json` and tags on merge, so there's no manual tagging.
+
+Editing `lib/*.mjs`? The [Paseo plugin](paseo-plugin/README.md) reuses the
+same policy from a vendored, byte-identical copy under `paseo-plugin/shared/`
+(Paseo stages only `paseo-plugin/`, so it can't read `../lib/` directly). Run
+`./scripts/sync-paseo-shared.sh` after editing `lib/` — CI enforces this with
+`scripts/sync-paseo-shared.sh --check` and fails the build if the two drift.
 
 ### Evals
 
