@@ -167,7 +167,7 @@ test("lib/stats.mjs: diagnostics (e.g. Paseo standdown) are excluded from decisi
   assert.equal(s.decisions.by_outcome.paseo_standdown, undefined);
 });
 
-test("lib/stats.mjs: CLI decisions group under gate \"cli\", separate from and not skewing other gates' rates", () => {
+test("lib/stats.mjs: CLI decisions are visible in by_gate but excluded from the overall total/by_outcome/rates", () => {
   const events = [
     { kind: "decision", gate: "ask", outcome: "answered" },
     { kind: "decision", gate: "ask", outcome: "personal" },
@@ -175,11 +175,18 @@ test("lib/stats.mjs: CLI decisions group under gate \"cli\", separate from and n
     { kind: "decision", gate: "cli", outcome: "a" },
   ];
   const s = computeStats(events);
-  assert.equal(s.decisions.total, 4);
+  // overall total/by_outcome only count the ask decisions — cli isn't a "hỏi hộ" funnel gate
+  assert.equal(s.decisions.total, 2);
+  assert.deepEqual(s.decisions.by_outcome, { answered: 1, personal: 1 });
+  assert.equal(s.decisions.by_outcome.true, undefined);
+  assert.equal(s.decisions.by_outcome.a, undefined);
+  // percentages are computed over the 2 ask decisions, not diluted by the 2 cli ones
+  assert.equal(s.decisions.positive_pct, 50);
+  assert.equal(s.decisions.fallback_pct, 50);
+
+  // cli still shows up in by_gate with its own count and outcomes
   assert.deepEqual(s.decisions.by_gate.ask, { total: 2, positive: 1, by_outcome: { answered: 1, personal: 1 } });
   assert.deepEqual(s.decisions.by_gate.cli, { total: 2, positive: 0, by_outcome: { true: 1, a: 1 } });
-  // ask's own positive/total (1/2) is untouched by the two cli decisions
-  assert.equal(s.decisions.by_gate.ask.positive / s.decisions.by_gate.ask.total, 0.5);
 });
 
 test("lib/jev.mjs: askJev retries 5xx until success within budget, logs retried + attempts", async () => {
