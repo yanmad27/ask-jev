@@ -1,6 +1,6 @@
 ---
 name: ask-jev
-description: Use whenever you are about to make a judgement call that isn't yours to invent — classify something, pick between a fixed set of options, answer a yes/no question, or rate something on a scale — and the answer follows from context you already have. Not for personal taste, style choices, or irreversible actions; those go to the user.
+description: Use whenever you are about to make a judgement call that isn't yours to invent — classify something, pick between a fixed set of options, answer a yes/no question, rate something on a scale, or decide which option the user would pick — and the answer follows from context you already have. Personal taste is answered by Jev only when grounded in the user's own words or past choices; irreversible actions always go to the user.
 ---
 
 # Ask Jev
@@ -9,6 +9,16 @@ Jev (typesafe.ai) is a small, fast evaluation model: given evidence and a
 definition of what each answer means, it returns a calibrated probability —
 not text. Consult it instead of silently deciding or interrupting the user.
 
+## Verify first
+
+If a fact can be checked with a read-only command or tool — CI status, an HTTP
+status code, whether a package is public, file contents, git state — check it
+yourself before asking Jev or the user, and put the verbatim result in `state`.
+Never ask anyone "did you do X?" when X is checkable. Real regression: an
+agent asked "did you make the GHCR package public?"; Jev picked "changed it
+now, recheck", but the package was still private (403 on an anonymous pull) —
+a plain anonymous pull would have answered it directly, no question needed.
+
 ## When to ask
 
 Ask Jev when:
@@ -16,10 +26,17 @@ Ask Jev when:
 - picking between a fixed set of options where the right one follows from
   evidence already in hand
 - a yes/no check with an observable answer ("does this diff touch auth code")
+- which option the user would pick, when they've deferred the choice
 
-Go straight to the user instead when the choice is personal taste, style, or
-irreversible (delete, send, publish, spend money). No evidence yet? Go get
-it first — Jev doesn't research, only judges what you hand it.
+Irreversible or destructive actions (delete, send, publish, spend money)
+always go straight to the user — never Jev, never you.
+
+Personal taste and style are not automatically the user's alone: ask Jev
+which option the user would pick, grounding `state` in their own messages or
+real past choices (see Delegation below). Jev answers only when that
+grounding and the pick's confidence both clear the threshold; otherwise it
+defers, and the user decides. No evidence yet? Go get it first — Jev doesn't
+research, only judges what you hand it.
 
 ## How to build a good request
 
@@ -100,6 +117,13 @@ stderr message (no key, malformed input, API error, timeout).
 - `confidence` summarizes how concentrated the distribution is, not
   correctness — threshold on it (reuse `ASK_JEV_ASK_THRESHOLD`, default `0.8`);
   below it, ask the user or gather more evidence instead of acting.
+
+## Report the choice
+
+Every time Jev decides something, tell the user in one line so they see what
+happened without being asked: `Jev chose "X" (0.93)` (option, then confidence
+in parentheses). For CLI calls you write this line yourself after reading
+`answers`; hooks already print it for you.
 
 ## Anti-patterns
 
