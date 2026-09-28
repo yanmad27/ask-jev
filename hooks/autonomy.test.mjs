@@ -43,17 +43,24 @@ const askInput = {
   tool_input: { questions: [{ question: "Merge now?", options: [{ label: "yes", description: "merge now" }, { label: "no", description: "wait" }] }] },
 };
 
-test("ask-jev: personal falls back in safe, not in full (destructive stays low)", async () => {
+test("ask-jev: personal falls back in safe; in full, only grounded personal answers get through", async () => {
   const answers = () => ({ pick: { choice: "o0", probabilities: { o0: 0.95 } }, personal: { probability: 0.9 }, destructive: { probability: 0.1 } });
   const safeServer = await dynamicStub(answers);
   const safeOut = await run("ask-jev.mjs", askInput, `http://127.0.0.1:${safeServer.address().port}`, "safe");
   safeServer.close();
   assert.equal(safeOut, ""); // personal wins in safe → no answer
 
-  const fullServer = await dynamicStub(answers);
-  const fullOut = await run("ask-jev.mjs", { ...askInput, session_id: `a-${Math.random()}` }, `http://127.0.0.1:${fullServer.address().port}`, "full");
-  fullServer.close();
-  assert.match(fullOut, /Jev answered/); // personal ignored in full
+  // full, but ungrounded (no real evidence backing the pick) → still deferred
+  const ungroundedServer = await dynamicStub(() => ({ ...answers(), grounded: { probability: 0.1 } }));
+  const ungroundedOut = await run("ask-jev.mjs", { ...askInput, session_id: `a-${Math.random()}` }, `http://127.0.0.1:${ungroundedServer.address().port}`, "full");
+  ungroundedServer.close();
+  assert.equal(ungroundedOut, ""); // a generic prior is not grounding → defer
+
+  // full, grounded in real user evidence and confident → answered
+  const groundedServer = await dynamicStub(() => ({ ...answers(), grounded: { probability: 0.95 } }));
+  const groundedOut = await run("ask-jev.mjs", { ...askInput, session_id: `a-${Math.random()}` }, `http://127.0.0.1:${groundedServer.address().port}`, "full");
+  groundedServer.close();
+  assert.match(groundedOut, /Jev chose/);
 });
 
 test("ask-jev: destructive (p=0.7) always hands to the user, both modes", async () => {

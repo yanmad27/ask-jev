@@ -18,8 +18,9 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { apiKey, askJev, logEvent } from "../lib/jev.mjs";
 import { buildState, hasContext } from "../lib/context.mjs";
-import { truncate, autonomy, DESTRUCTIVE, FOCUS } from "../lib/gate.mjs";
+import { truncate, autonomy } from "../lib/gate.mjs";
 import { env } from "../lib/env.mjs";
+import { buildPickQuestions, buildMultiQuestions, interpretPick, interpretMulti, pickCriteria } from "../lib/answer-policy.mjs";
 
 /**
  * hooks.json và self-register.mjs (xem file đó) có thể cùng đăng ký hook này, nên
@@ -47,26 +48,15 @@ function logDecision(question, options, outcome, extra = {}) {
   logEvent({ kind: "decision", source: "hook", gate: "ask", session_id: currentSessionId, question, options: options.map((o) => o.label), outcome, ...extra });
 }
 
-/**
- * Câu hỏi `personal` dùng chung cho cả single-pick lẫn multiSelect: câu hỏi này
- * có được phép tự quyết hay không.
- *
- * Thiếu nó, Jev sẽ tự tin chọn giúp bạn cả tông màu thương hiệu lẫn việc xoá
- * thư mục — sai không phải về sự thật mà về thẩm quyền. Ranh giới đó phải do
- * chính nó nhận ra, vì chỉ nó đọc được câu hỏi.
- */
-const PERSONAL_QUESTION = {
-  type: "boolean",
-  safe: true, // an toàn = để người dùng quyết (p cao); mâu thuẫn phải nghiêng về defer, không auto-answer
-  instructions: {
-    question: "Is `pendingQuestion` something only the user has standing to answer?",
-    focus: "A matter of personal taste, aesthetics, private priorities, or an irreversible consequence.",
-  },
-  criteria: {
-    true: "Personal preference, aesthetic choice, a trade-off that depends on private goals, or deleting/sending/publishing something that cannot be undone",
-    false: "There is a correct answer derivable from `conversationContext`, established convention, or technical fact",
-  },
-};
+/** Log kết quả của answer-policy.mjs rồi trả về {label, confidence} nếu đã trả lời, ngược lại null. */
+function applyResult(question, options, result) {
+  logDecision(question, options, result.outcome, {
+    ...(result.label ? { label: result.label } : {}),
+    ...(result.confidence !== undefined ? { confidence: result.confidence } : {}),
+    ...(result.reason ? { reason: truncate(result.reason, 160) } : {}),
+  });
+  return result.outcome === "answered" ? { label: result.label, confidence: result.confidence } : null;
+}
 
 async function decide(key, { question, options, context, sizes }) {
   if (options.length < 2) {
@@ -74,62 +64,19 @@ async function decide(key, { question, options, context, sizes }) {
     return null;
   }
 
-  // main() đã chặn description rỗng, nên ở đây description luôn có sẵn.
-  // criteria dạng {what, not_for} và instructions dạng {question, focus} theo
-  // docs.typesafe.ai/primitives/choice — not_for nêu tên các lựa chọn khác để
-  // ép tính loại trừ lẫn nhau, chứ không chỉ liệt kê định nghĩa rời rạc.
-  const criteria = Object.fromEntries(
-    options.map((o, i) => [
-      `o${i}`,
-      {
-        what: `${o.label} — ${o.description}`,
-        not_for: options.filter((_, j) => j !== i).map((other) => other.label).join(", "),
-      },
-    ]),
-  );
-
+  const mode = autonomy();
   // docs.typesafe.ai/concepts/state: state là nội dung để đánh giá, tách khỏi câu
   // hỏi (judgment) nằm trong instructions; mỗi phần đặt tên rõ để giữ quan hệ.
   const answers = await askJev(
     key,
-    { conversationContext: context, pendingQuestion: question, answerOptions: criteria },
-    {
-      pick: {
-        type: "choice",
-        instructions: {
-          question: "Given `conversationContext`, which option answers `pendingQuestion`? Acting on the user's behalf, which would they pick?",
-          focus:
-            "Each option's `what` in `answerOptions` is its definition, `not_for` is what it must not overlap with. Choose what the user themselves would choose.",
-        },
-        criteria,
-      },
-      personal: PERSONAL_QUESTION,
-      destructive: { type: "boolean", safe: true, instructions: { question: "Is `pendingQuestion` about a destructive/irreversible action?", focus: FOCUS }, criteria: DESTRUCTIVE },
-    },
+    { conversationContext: context, pendingQuestion: question, answerOptions: pickCriteria(options) },
+    buildPickQuestions(options, { autonomy: mode }),
     "hook",
     8000,
     sizes,
   );
 
-  if ((answers.destructive?.probability ?? 1) >= 0.6) {
-    logDecision(question, options, "destructive");
-    return null;
-  }
-  if (autonomy() !== "full" && answers.personal.probability > 0.5) {
-    logDecision(question, options, "personal");
-    return null;
-  }
-  const confidence = answers.pick.probabilities?.[answers.pick.choice] ?? 1;
-  if (confidence < THRESHOLD) {
-    logDecision(question, options, "low_confidence", { confidence });
-    return null;
-  }
-
-  const picked = options[Number.parseInt(answers.pick.choice.slice(1), 10)];
-  const label = picked?.label;
-  const reason = truncate(picked?.description ?? "", 160);
-  logDecision(question, options, "answered", { label, confidence, reason });
-  return { label, confidence };
+  return applyResult(question, options, interpretPick(answers, options, { autonomy: mode, threshold: THRESHOLD }));
 }
 
 /**
@@ -144,60 +91,17 @@ async function decideMulti(key, { question, options, context, sizes }) {
     return null;
   }
 
-  const questions = {
-    personal: PERSONAL_QUESTION,
-    destructive: { type: "boolean", safe: true, instructions: { question: "Is `pendingQuestion` about a destructive/irreversible action?", focus: FOCUS }, criteria: DESTRUCTIVE },
-  };
-  options.forEach((o, i) => {
-    questions[`o${i}`] = {
-      type: "boolean",
-      instructions: {
-        question: `${question} — does this option apply? Acting on the user's behalf, would they pick it?`,
-        focus: `Judge only whether "${o.label}" applies, independent of the other options.`,
-      },
-      criteria: {
-        true: `${o.label} — ${o.description}`,
-        false: `Does not apply: ${o.label} — ${o.description} is not the case`,
-      },
-    };
-  });
+  const mode = autonomy();
+  const answers = await askJev(
+    key,
+    { conversationContext: context, pendingQuestion: question },
+    buildMultiQuestions(question, options, { autonomy: mode }),
+    "hook",
+    8000,
+    sizes,
+  );
 
-  const answers = await askJev(key, { conversationContext: context, pendingQuestion: question }, questions, "hook", 8000, sizes);
-
-  if ((answers.destructive?.probability ?? 1) >= 0.6) {
-    logDecision(question, options, "destructive");
-    return null;
-  }
-  if (autonomy() !== "full" && answers.personal.probability > 0.5) {
-    logDecision(question, options, "personal");
-    return null;
-  }
-
-  const selected = [];
-  const reasons = [];
-  let confidence = 1;
-  for (let i = 0; i < options.length; i++) {
-    const p = answers[`o${i}`]?.probability;
-    if (p === undefined) {
-      logDecision(question, options, "error");
-      return null;
-    }
-    if (p >= THRESHOLD) {
-      selected.push(options[i].label);
-      reasons.push(options[i].description);
-      confidence = Math.min(confidence, p);
-    } else if (p <= 1 - THRESHOLD) {
-      confidence = Math.min(confidence, 1 - p);
-    } else {
-      logDecision(question, options, "low_confidence", { confidence: p });
-      return null;
-    }
-  }
-
-  const label = selected.length > 0 ? selected.join(", ") : "none";
-  const reason = truncate(reasons.length > 0 ? reasons.join("; ") : "no option applied", 160);
-  logDecision(question, options, "answered", { label, confidence, reason });
-  return { label, confidence };
+  return applyResult(question, options, interpretMulti(answers, options, { autonomy: mode, threshold: THRESHOLD }));
 }
 
 async function main() {
@@ -216,7 +120,7 @@ async function main() {
   // model. Nên trong Paseo hook đứng im: để câu hỏi hiện bình thường cho người dùng,
   // không auto-answer, không lỗi đỏ. PASEO_AGENT_ID chỉ tồn tại trong agent của Paseo.
   if (process.env.PASEO_AGENT_ID) {
-    logEvent({ kind: "decision", source: "hook", gate: "ask", session_id: input.session_id, outcome: "paseo_standdown" });
+    logEvent({ kind: "diagnostic", source: "hook", gate: "ask", session_id: input.session_id, outcome: "paseo_standdown" });
     return;
   }
 
@@ -285,9 +189,8 @@ async function main() {
     .filter(Boolean);
   if (resolved.length === 0) return;
 
-  const answered = resolved
-    .map((r) => `"${r.question}" → ${r.label} (Jev: ${r.confidence.toFixed(2)})`)
-    .join("\n");
+  const chosenLines = resolved.map((r) => `Jev chose "${r.label}" (${r.confidence.toFixed(2)})`);
+  const answered = chosenLines.join("\n");
   const unresolved = questions.filter((_, i) => !results[i]?.label).map((q) => `"${q.question}"`);
 
   // Đây không phải lỗi: Claude Code chỉ có permissionDecision "deny" để đưa văn bản
@@ -304,7 +207,7 @@ async function main() {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
       permissionDecisionReason: reason,
-      systemMessage: `✓ Jev answered for you: ${resolved.map((r) => r.label).join(", ")}`,
+      systemMessage: chosenLines.join("; "),
     },
   }));
 }
