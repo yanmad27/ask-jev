@@ -6,6 +6,8 @@ import {
   buildMultiQuestions,
   interpretPick,
   interpretMulti,
+  PERSONAL_QUESTION,
+  GROUNDED_QUESTION,
 } from "../lib/answer-policy.mjs";
 
 const opts = [{ label: "A", description: "a" }, { label: "B", description: "b" }];
@@ -162,4 +164,55 @@ test("interpretPick/interpretMulti: personal present but grounded missing in ful
 
   const multiAnswers = { personal: { probability: 0.9 }, destructive: { probability: 0.1 }, o0: { probability: 0.9 }, o1: { probability: 0.05 } };
   assert.equal(interpretMulti(multiAnswers, opts, { autonomy: "full", threshold: T }).outcome, "error");
+});
+
+// Live-captured 2026-09-28 (Paseo smoke test, see commit message for the /tmp reproduction
+// scripts and full raw answers): "Which package manager should I use to install dependencies?"
+// (npm/pnpm), with the user having explicitly said "never use npm here" — unambiguously
+// answerable, not personal, not destructive. Real askJev answers for that exact payload:
+//   pick: pnpm, confidence 1 | personal: 0.6416 | destructive: 0.664 | grounded: 0.8648
+// destructive's forward probability was a confident 0.04; its mirror twin hedged at 0.50, and
+// reconcile()'s safe-side pull on that disagreement landed the reconciled value at 0.664 — this
+// sits BELOW an existing, deliberate test (hooks/ask-jev.test.mjs: a "Delete prod DB?" contradiction
+// reconciling to 0.7 must still defer as destructive), so raising the 0.6 gate to exclude 0.664
+// would also blunt that real safety behavior — not fixed here. personal's 0.6416 is a second,
+// independent instance of the same class of issue: a technical question with a real evidence-backed
+// answer still reads as noticeably "personal" merely for being posed as a choice between labeled
+// options. Both PERSONAL_QUESTION and GROUNDED_QUESTION's wording were strengthened to exclude that
+// — this can't be regression-tested via interpretPick with fixed numbers (the fix is in what we ask
+// the model, not in how interpretPick reads its answer); verified live instead (recorded in the
+// commit message). These tests guard the wording itself against being quietly reverted, and confirm
+// interpretPick still answers correctly given the (unaffected) raw numbers this payload produced.
+test("interpretPick: the live-captured pnpm payload's raw answers still resolve to answered/pnpm", () => {
+  const pkgManagerOpts = [
+    { label: "npm", description: "Install dependencies with npm" },
+    { label: "pnpm", description: "Install dependencies with pnpm" },
+  ];
+  const rawAnswers = {
+    pick: { choice: "o1", confidence: 1, probabilities: { o0: 0, o1: 1 } },
+    personal: { probability: 0.6416000000000001, confidence: 0.6416000000000001 },
+    destructive: { probability: 0.1, confidence: 0.1 }, // isolates the personal/grounded path being tested here
+    grounded: { probability: 0.8648, confidence: 0.8648 },
+  };
+
+  const result = interpretPick(rawAnswers, pkgManagerOpts, { autonomy: "full", threshold: T });
+  assert.equal(result.outcome, "answered");
+  assert.equal(result.label, "pnpm");
+});
+
+test("PERSONAL_QUESTION explicitly rules out being phrased as a choice between labeled options as evidence of personal taste", () => {
+  const text = `${PERSONAL_QUESTION.instructions.focus} ${PERSONAL_QUESTION.criteria.true} ${PERSONAL_QUESTION.criteria.false}`;
+  assert.match(text, /phrased as a|regardless of how the question/i);
+});
+
+test("GROUNDED_QUESTION explicitly rules out pendingQuestion's own wording/options appearing in context as evidence", () => {
+  // Live-captured 2026-09-28: the same smoke test's baseless color-preference question ("no
+  // preference evidence anywhere") scored grounded 0.86-0.96 — conversationContext happened to
+  // contain the question's own text/options from an earlier message describing what to ask later,
+  // and the model counted that as evidence, wrongly clearing the ungrounded_personal defer. This
+  // can't be regression-tested via interpretPick with fixed numbers (the fix is in what we ask the
+  // model, not in how we read its answer) — verified live instead (recorded in the commit message);
+  // this guards the wording itself against being quietly reverted.
+  const text = `${GROUNDED_QUESTION.instructions.focus} ${GROUNDED_QUESTION.criteria.true} ${GROUNDED_QUESTION.criteria.false}`;
+  assert.match(text, /own wording|options.*appearing|independent of the question/i);
 });

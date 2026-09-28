@@ -23,11 +23,18 @@ export const PERSONAL_QUESTION = {
   safe: true, // an toàn = để người dùng quyết (p cao); mâu thuẫn phải nghiêng về defer, không auto-answer
   instructions: {
     question: "Is `pendingQuestion` something only the user has standing to answer?",
-    focus: "A matter of personal taste, aesthetics, private priorities, or an irreversible consequence.",
+    // Live-captured evidence (2026-09-28 Paseo smoke test): "which package manager should I use"
+    // — with the user having explicitly said "never use npm here" — scored personal 0.64. Being
+    // phrased as a choice between labeled options (the AskUserQuestion format itself) isn't what
+    // makes something personal; a technical question with a real, evidence-backed answer is posed
+    // the same way.
+    focus:
+      "A matter of personal taste, aesthetics, private priorities, or an irreversible consequence — not merely being phrased as a " +
+      "choice between labeled options, which a technical question with a real, evidence-backed answer is posed the same way.",
   },
   criteria: {
     true: "Personal preference, aesthetic choice, a trade-off that depends on private goals, or deleting/sending/publishing something that cannot be undone",
-    false: "There is a correct answer derivable from `conversationContext`, established convention, or technical fact",
+    false: "There is a correct answer derivable from `conversationContext`, established convention, or technical fact — regardless of how the question or its options are phrased",
   },
 };
 
@@ -36,11 +43,20 @@ export const GROUNDED_QUESTION = {
   safe: false, // an toàn = ungrounded (defer); mâu thuẫn phải nghiêng về false, không tự tin bừa
   instructions: {
     question: "Do direct user messages or the user's real past choices in `conversationContext` support a specific option for `pendingQuestion`?",
-    focus: "A generic aesthetic prior (e.g. \"most people prefer X\") does not count as grounding — only concrete evidence from this user.",
+    // Live-captured evidence (2026-09-28 Paseo smoke test): a baseless color-preference question
+    // scored grounded 0.86-0.96 — conversationContext happened to contain pendingQuestion's own
+    // text/options (from an earlier message describing what to ask later), and the model counted
+    // that as evidence. The explicit exclusion below measurably reduced (though didn't eliminate)
+    // that false grounding in /tmp/jev-repro-* reruns of the same payload.
+    focus:
+      "A generic aesthetic prior (e.g. \"most people prefer X\") does not count as grounding — only concrete evidence from this user. " +
+      "Neither does `pendingQuestion`'s own wording or `answerOptions`' labels merely appearing somewhere in `conversationContext` " +
+      "(e.g. because an earlier message described what to ask later, or is the ask itself) — that's the question being asked, not " +
+      "the user expressing a preference. Only an actual stated preference, decision, or past choice counts.",
   },
   criteria: {
-    true: "conversationContext contains a direct user statement or a documented past choice pointing to a specific option",
-    false: "No such evidence exists — support would rest on a generic prior, a guess, or the absence of information",
+    true: "conversationContext contains a direct user statement or a documented past choice pointing to a specific option, independent of the question/options being asked",
+    false: "No such evidence exists — support would rest on a generic prior, a guess, the question's own wording/options appearing in context, or the absence of information",
   },
 };
 
