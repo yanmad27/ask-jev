@@ -105,14 +105,24 @@ and it answers natively — no hook, no red `hook error`.** The plugin listens
 for the permission request itself and replies with `respondToPermission`
 directly, instead of a Claude Code hook denying the tool. A request with
 several questions is all-or-nothing: if Jev defers even one of them, the
-whole request reaches you unanswered, never a partial answer. Every answer
-Jev gives is reported in the agent's timeline as `Jev chose "X" (0.93)`.
+whole request reaches you unanswered, never a partial answer. An answer Jev
+gives is reported in the agent's timeline as `Jev chose "X" (0.93)` only once
+Paseo's own resolution event confirms it actually took effect — a stale
+respond to an already-resolved request "succeeds" without landing, so
+succeeding isn't proof. One that's never confirmed within a bounded wait is
+logged as `unconfirmed` instead, with no timeline entry.
 Claude Code's own `AskUserQuestion` hook still stands down under
 `PASEO_AGENT_ID` either way (logged as a `diagnostic`, not a `decision`, so
 it never skews the stats), so the two never fight over the same question.
 Without the plugin installed, every question in Paseo reaches you normally
 instead — asking Jev directly for judgement calls (below) is CLI-based and
 works either way; the stats panel keeps recording.
+
+**Known limit:** Paseo's resolution event carries no responder identity,
+only the final answer — so if you happen to answer, within that ~1 RPC
+round-trip window, with exactly the option(s) Jev had picked, it's logged
+and reported as a Jev answer rather than a `user_choice`. The reverse never
+happens: a Jev answer is never logged as a `user_choice`.
 
 The plugin needs the same Jev API key as the hooks — `~/.claude/ask-jev.key`,
 or `TYPESAFE_API_KEY`/`ASK_JEV_API_KEY` — but it's read from the **Paseo
@@ -417,11 +427,14 @@ call to `bin/jev.mjs` — is appended as one JSON line to
 `~/.claude/ask-jev.log` (override the path with `ASK_JEV_LOG_FILE`, disable
 entirely with `ASK_JEV_LOG=0`). Every line carries a unique `event_id`. Each
 gate decision line carries which `gate` produced it (`ask`, `permission`,
-`stop`, `bash`, `prompt`), Jev's answer as a `label` + `confidence`, and a
-short `reason` — the criterion text Jev matched, never the conversation
+`stop`, `bash`, `prompt`, `cli`), Jev's answer as a `label` + `confidence`,
+and a short `reason` — the criterion text Jev matched, never the conversation
 transcript or the `state` payload sent to Jev; a direct `bin/jev.mjs` call
-logs the same shape per question (`question`, `options`, `result`,
-`confidence`). A [Paseo](#in-paseo) standdown is logged as
+logs the same shape per question under `gate:"cli"` (`question`, `options`,
+`outcome`, `result`, `confidence`) — visible in `decisions.by_gate.cli`, but
+excluded from the overall total, `by_outcome`, and the two percentages below,
+since a standalone CLI call isn't a question that got answered instead of
+reaching you. A [Paseo](#in-paseo) standdown is logged as
 `kind:"diagnostic"`, not `"decision"`, so it never counts toward the totals
 below. Only a real human answer is ever logged as `kind:"user_choice"` —
 from a plain Claude Code `AskUserQuestion` (a `PostToolUse` hook) or from you

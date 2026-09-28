@@ -104,14 +104,25 @@ nó trả lời native — không qua hook, không có `hook error` màu đỏ n
 Plugin tự lắng nghe permission request và trả lời bằng `respondToPermission`
 trực tiếp, thay vì một hook Claude Code phải deny tool. Một request có nhiều
 câu hỏi là tất-cả-hoặc-không-gì: nếu Jev bỏ qua dù chỉ một câu, cả request
-tới tay bạn chưa được trả lời, chứ không trả lời một phần. Mỗi đáp án của
-Jev được báo lại trong timeline của agent dưới dạng `Jev chose "X" (0.93)`.
+tới tay bạn chưa được trả lời, chứ không trả lời một phần. Một đáp án của Jev chỉ được báo lại trong timeline của agent dưới dạng `Jev
+chose "X" (0.93)` MỘT KHI chính sự kiện resolution của Paseo xác nhận nó
+thật sự có hiệu lực — một lần respond trễ vào một request đã resolved vẫn
+"thành công" mà không có tác dụng gì, nên thành công không phải là bằng
+chứng. Đáp án nào không được xác nhận trong một khoảng chờ giới hạn thì được
+ghi là `unconfirmed` thay vào đó, không có dòng timeline nào cả.
 Hook `AskUserQuestion` của Claude Code vẫn đứng im dưới `PASEO_AGENT_ID` dù
 sao đi nữa (ghi log dưới dạng `diagnostic`, không phải `decision`, nên không
 làm lệch số liệu thống kê), nên hai bên không bao giờ giành nhau cùng một
 câu hỏi. Không cài plugin thì mọi câu hỏi trong Paseo vẫn tới tay bạn như
 bình thường — hỏi Jev trực tiếp cho các phán đoán (bên dưới) chạy qua CLI
 nên vẫn hoạt động dù có plugin hay không; panel thống kê vẫn ghi nhận.
+
+**Giới hạn đã biết:** sự kiện resolution của Paseo không mang theo danh tính
+người trả lời, chỉ có đáp án cuối cùng — nên nếu bạn tình cờ tự trả lời,
+trong khoảng ~1 vòng round-trip RPC đó, đúng bằng (những) option Jev đã
+chọn, nó sẽ được ghi và báo lại như một đáp án của Jev chứ không phải
+`user_choice`. Điều ngược lại không bao giờ xảy ra: đáp án của Jev không bao
+giờ bị ghi thành `user_choice`.
 
 Plugin cần cùng một Jev API key như các hook — `~/.claude/ask-jev.key`, hoặc
 `TYPESAFE_API_KEY`/`ASK_JEV_API_KEY` — nhưng được đọc từ môi trường và home
@@ -417,13 +428,16 @@ hay một lời gọi CLI trực tiếp tới `bin/jev.mjs` — được ghi th�
 vào `~/.claude/ask-jev.log` (đổi đường dẫn bằng `ASK_JEV_LOG_FILE`, tắt hẳn
 bằng `ASK_JEV_LOG=0`). Mỗi dòng đều có một `event_id` duy nhất. Mỗi dòng
 quyết định của gate mang theo `gate` nào tạo ra nó (`ask`, `permission`,
-`stop`, `bash`, `prompt`), đáp án của Jev dưới dạng `label` + `confidence`,
+`stop`, `bash`, `prompt`, `cli`), đáp án của Jev dưới dạng `label` + `confidence`,
 và một `reason` ngắn — phần tiêu chí Jev khớp, không bao giờ là transcript
 hội thoại hay payload `state` đã gửi cho Jev; một lời gọi `bin/jev.mjs` trực
-tiếp ghi log cùng cấu trúc đó cho mỗi câu hỏi (`question`, `options`,
-`result`, `confidence`). Một lần đứng im của [Paseo](#trong-paseo) được ghi
-dưới dạng `kind:"diagnostic"`, không phải `"decision"`, nên không tính vào
-các con số tổng bên dưới. Chỉ một câu trả lời thật của con người mới được
+tiếp ghi log dưới `gate:"cli"` cùng cấu trúc đó cho mỗi câu hỏi
+(`question`, `options`, `outcome`, `result`, `confidence`) — hiện trong
+`decisions.by_gate.cli`, nhưng bị loại khỏi tổng chung, `by_outcome`, và
+hai phần trăm bên dưới, vì một lời gọi CLI đơn lẻ không phải là một câu
+hỏi được trả lời thay vì tới tay bạn. Một lần đứng im của
+[Paseo](#trong-paseo) được ghi dưới dạng `kind:"diagnostic"`, không phải
+`"decision"`, nên không tính vào các con số tổng bên dưới. Chỉ một câu trả lời thật của con người mới được
 ghi dưới dạng `kind:"user_choice"` — từ một `AskUserQuestion` bình thường
 của Claude Code (một hook `PostToolUse`) hoặc từ việc bạn tự trả lời trong
 Paseo khi Jev bỏ qua; đáp án của chính Jev luôn được ghi là `"decision"`,
