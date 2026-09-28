@@ -2,11 +2,11 @@ import { randomUUID } from "node:crypto";
 import type { PluginServerContext, PluginHookAgent } from "@getpaseo/plugin/server";
 import type { PaseoApi } from "@getpaseo/client";
 import type { AgentPermissionRequest, AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
-import { apiKey, askJev, logEvent } from "../shared/jev.mjs";
-import { buildState, hasContext } from "../shared/context.mjs";
-import { autonomy } from "../shared/gate.mjs";
-import { env } from "../shared/env.mjs";
-import { buildPickQuestions, buildMultiQuestions, interpretPick, interpretMulti, pickCriteria } from "../shared/answer-policy.mjs";
+import { apiKey, askJev, logEvent } from "./vendor/jev.mjs";
+import { buildState, hasContext } from "./vendor/context.mjs";
+import { autonomy } from "./vendor/gate.mjs";
+import { env } from "./vendor/env.mjs";
+import { buildPickQuestions, buildMultiQuestions, interpretPick, interpretMulti, pickCriteria } from "./vendor/answer-policy.mjs";
 import { remoteOf } from "./log";
 
 const THRESHOLD = Number(env("ASK_THRESHOLD", "0.8"));

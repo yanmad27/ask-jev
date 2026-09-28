@@ -8,7 +8,7 @@ Needs the same Jev API key as the hooks — `~/.claude/ask-jev.key`, or `TYPESAF
 
 Install only **one** copy of the plugin. Two copies loaded in the same process (e.g. `ask-jev` and a local dev copy `ask-jev-dev`) share an in-memory dedupe map keyed by agent + request id, so they won't both answer the same request — but there's no reason to run two.
 
-Reuses [`../lib/`](../lib/) (same policy as the hooks) — the whole directory is committed verbatim as `shared/` since Paseo stages only `paseo-plugin/`.
+Reuses [`../lib/`](../lib/) (same policy as the hooks), committed verbatim since Paseo stages only `paseo-plugin/` — but not all into `shared/`: Paseo bundles a plugin's `shared/` as one isomorphic (client+server) chunk and refuses any Node built-in import there, so only the Node-free `stats.mjs` lives in `shared/`; the rest (`jev`/`context`/`gate`/`env`/`answer-policy.mjs`, all server-only) live under `server/vendor/` instead. `server/shared-no-node-builtins.test.ts` guards `shared/` against a regression.
 
 ## Install
 
@@ -32,4 +32,4 @@ Cmd+K / Ctrl+K → "Ask Jev" (Command Center — panels register both panel and 
 
 ## Dev loop
 
-`cd paseo-plugin && npm install && npm run build` (syncs `shared/`, then `tsc --noEmit`). After editing anything in `../lib/`, run `npm run sync-shared` before `paseo plugin reload ask-jev` — CI fails if `shared/` drifts from `../lib/` (`../scripts/sync-paseo-shared.sh --check`). `npm test` runs the plugin's own tests (`node --test` via `tsx`). `paseo plugin logs ask-jev` shows output.
+`cd paseo-plugin && npm install && npm run build` (syncs `shared/` and `server/vendor/`, then `tsc --noEmit`). After editing anything in `../lib/`, run `npm run sync-shared` before `paseo plugin reload ask-jev` — CI fails if either copy drifts from `../lib/` (`../scripts/sync-paseo-shared.sh --check`). `npm test` runs the plugin's own tests (`node --test` via `tsx`). `paseo plugin logs ask-jev` shows output.

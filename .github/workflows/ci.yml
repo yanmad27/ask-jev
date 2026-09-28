@@ -65,5 +65,5 @@ jobs:
         working-directory: paseo-plugin
         run: npm test
 
-      - name: shared/ matches ../lib/ (parity check)
+      - name: shared/ and server/vendor/ match ../lib/ (parity check)
         run: bash scripts/sync-paseo-shared.sh --check
