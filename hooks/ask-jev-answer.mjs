@@ -12,9 +12,19 @@ const PREFIXES = [
 ];
 const unescape = (s) => s.replace(/\\(.)/g, "$1");
 
+// Content-block-array form (same shape lib/context.mjs's textOf() flattens from transcript rows) —
+// tool_response.content can arrive as [{type:"text", text:"..."}] instead of a plain string.
+function flattenParts(parts) {
+  if (!Array.isArray(parts)) return "";
+  return parts.map((p) => (typeof p?.text === "string" ? p.text : "")).join("");
+}
+
 function responseText(r) {
   if (typeof r === "string") return r;
-  if (r && typeof r === "object") return typeof r.content === "string" ? r.content : typeof r.text === "string" ? r.text : "";
+  if (!r || typeof r !== "object") return "";
+  if (typeof r.content === "string") return r.content;
+  if (Array.isArray(r.content)) return flattenParts(r.content);
+  if (typeof r.text === "string") return r.text;
   return "";
 }
 

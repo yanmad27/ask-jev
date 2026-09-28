@@ -61,5 +61,9 @@ jobs:
         working-directory: paseo-plugin
         run: npm run build
 
-      - name: shared/stats.mjs matches ../lib/stats.mjs
-        run: git diff --exit-code paseo-plugin/shared/stats.mjs
+      - name: Unit tests
+        working-directory: paseo-plugin
+        run: npm test
+
+      - name: shared/ matches ../lib/ (parity check)
+        run: bash scripts/sync-paseo-shared.sh --check

@@ -29,6 +29,8 @@ interface StatsSummary {
 
 interface LogEvent {
   ts: string;
+  event_id?: string;
+  source?: string;
   kind: string;
   gate?: string;
   outcome?: string;
@@ -120,6 +122,8 @@ export function getStats({ since, outcome, gate, cwd }: RpcInput<typeof jevStats
     user_overrides: summary.user_overrides,
     recent: recent.map((d) => ({
       ts: d.ts,
+      event_id: d.event_id,
+      source: d.source,
       gate: d.gate,
       outcome: d.outcome ?? "",
       question: d.question ?? "",
@@ -132,10 +136,14 @@ export function getStats({ since, outcome, gate, cwd }: RpcInput<typeof jevStats
   };
 }
 
-/** Full raw log line for a row, keyed by ts+gate — reads the same cache getStats() populates. */
-export function getDecision({ ts, gate }: RpcInput<typeof jevDecisionRpc>): Record<string, unknown> | null {
+/** Full raw log line for a row — keyed by event_id when the row has one, else the old ts+gate key. */
+export function getDecision({ event_id, ts, gate }: RpcInput<typeof jevDecisionRpc>): Record<string, unknown> | null {
   const events = loadEvents(logPath());
   if (!events) return null;
+  if (event_id) {
+    const byId = events.find((e) => e.event_id === event_id);
+    if (byId) return byId as unknown as Record<string, unknown>;
+  }
   const match = events.find((e) => e.ts === ts && (e.gate ?? "") === (gate ?? ""));
   return (match as unknown as Record<string, unknown>) ?? null;
 }
