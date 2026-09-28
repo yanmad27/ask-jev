@@ -1,8 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
-import { writeFileSync, unlinkSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { PluginServerContext, PluginHookAgent } from "@getpaseo/plugin/server";
 import type { PaseoApi } from "@getpaseo/client";
 import type { AgentPermissionRequest, AgentPermissionResponse } from "@getpaseo/protocol/agent-types";
@@ -11,8 +7,16 @@ import { buildState, hasContext } from "../shared/context.mjs";
 import { autonomy } from "../shared/gate.mjs";
 import { env } from "../shared/env.mjs";
 import { buildPickQuestions, buildMultiQuestions, interpretPick, interpretMulti, pickCriteria } from "../shared/answer-policy.mjs";
+import { remoteOf } from "./log";
 
 const THRESHOLD = Number(env("ASK_THRESHOLD", "0.8"));
+// ponytail: swept lazily whenever a request comes in or resolves; a live daemon gets plenty of
+// those. An entry with jevAnswers that's still unswept-but-unresolved past this age gets logged
+// unconfirmed and dropped — a bounded wait for confirmation, not an unbounded leak. Read fresh on
+// every sweep (not cached at module load) so ASK_JEV_PASEO_TTL_MS can be set after import in tests.
+function trackedTtlMs(): number {
+  return Number(env("PASEO_TTL_MS", String(5 * 60_000)));
+}
 
 interface PaseoOption {
   label: string;
@@ -29,10 +33,20 @@ interface PaseoQuestion {
 type PickResult = { outcome: string; label?: string; confidence?: number; reason?: string };
 
 interface TrackedRequest {
+  owner: string;
+  agentId: string;
+  requestId: string;
+  cwd: string;
+  repo?: string;
   questions: PaseoQuestion[];
-  answeredByJev: boolean;
+  createdAt: number;
   resolved: boolean;
   waiters: Array<() => void>;
+  /** The exact answers map we're about to send (or already sent) — set BEFORE respondToPermission
+   * is called, so the resolved handler can tell "our answer took effect" from "it didn't" purely by
+   * comparing values, regardless of whether resolved arrives before or after respond() returns. */
+  jevAnswers?: Record<string, string>;
+  jevResults?: PickResult[];
 }
 
 const INFLIGHT_KEY = Symbol.for("ask-jev.paseo.inflight");
@@ -43,20 +57,34 @@ function inflightMap(): Map<string, TrackedRequest> {
   return g[INFLIGHT_KEY] as Map<string, TrackedRequest>;
 }
 
-/** Mirrors server/log.ts's remoteOf — best-effort, no caching (one-shot per request here). */
-function repoOf(cwd: string): string | undefined {
-  try {
-    return (
-      execFileSync("git", ["-C", cwd, "config", "--get", "remote.origin.url"], { timeout: 1000, stdio: ["ignore", "pipe", "ignore"] })
-        .toString()
-        .trim() || undefined
-    );
-  } catch {
-    return undefined;
+/** Evicts entries this sweep call notices are stale, logging unconfirmed for ones we actually
+ * answered but never heard back on. Entries that already logged a terminal outcome at defer time
+ * (no_key, no_context, missing_definition, ...) are just dropped — nothing more to say. */
+function sweepStale(map: Map<string, TrackedRequest>) {
+  const now = Date.now();
+  const ttl = trackedTtlMs();
+  for (const [key, tracked] of map) {
+    if (now - tracked.createdAt < ttl) continue;
+    if (tracked.jevAnswers && !tracked.resolved) {
+      const meta = metaOf(tracked);
+      logPerQuestion(tracked.questions, meta, "unconfirmed", () => undefined);
+    }
+    map.delete(key);
   }
 }
 
-/** Only user/assistant text, in the shape lib/context.mjs's readRows() expects from a real transcript file. */
+function metaOf(tracked: Pick<TrackedRequest, "agentId" | "repo" | "requestId">) {
+  return { agent: tracked.agentId, ...(tracked.repo ? { repo: tracked.repo } : {}), request_id: tracked.requestId };
+}
+
+function logPerQuestion(questions: PaseoQuestion[], meta: Record<string, unknown>, outcome: string, reasonFor: (q: PaseoQuestion, i: number) => string | undefined) {
+  questions.forEach((q, i) => {
+    const reason = reasonFor(q, i);
+    logEvent({ kind: "decision", source: "paseo", gate: "ask", outcome, question: q.question, ...(reason ? { reason } : {}), ...meta });
+  });
+}
+
+/** Only user/assistant text, in the row shape lib/context.mjs's transcriptRows expects. */
 function timelineToRows(entries: unknown[]): Array<{ type: string; message: { content: string } }> {
   const rows: Array<{ type: string; message: { content: string } }> = [];
   for (const entry of entries) {
@@ -68,10 +96,8 @@ function timelineToRows(entries: unknown[]): Array<{ type: string; message: { co
   return rows;
 }
 
-/**
- * Builds the same state shape the hook uses, from the Paseo timeline instead of a Claude Code
- * transcript file — writes a synthetic transcript so the vendored buildState() needs no changes.
- */
+/** Builds the same state shape the hook uses, from the Paseo timeline instead of a Claude Code
+ * transcript file — buildState's transcriptRows takes the rows directly, no temp file needed. */
 async function fetchState(paseo: PaseoApi, agentId: string, cwd: string): Promise<{ state: unknown; sizes: Record<string, number> }> {
   let entries: unknown[] = [];
   try {
@@ -80,19 +106,9 @@ async function fetchState(paseo: PaseoApi, agentId: string, cwd: string): Promis
   } catch {
     entries = [];
   }
-  const rows = timelineToRows(entries);
-  const tmpFile = join(tmpdir(), `ask-jev-paseo-${randomUUID()}.jsonl`);
-  writeFileSync(tmpFile, rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
-  try {
-    const built = buildState({ transcriptPath: tmpFile, cwd, sessionId: undefined, action: undefined, extra: undefined });
-    return built as { state: unknown; sizes: Record<string, number> };
-  } finally {
-    try {
-      unlinkSync(tmpFile);
-    } catch {
-      /* best-effort cleanup */
-    }
-  }
+  const options = { transcriptRows: timelineToRows(entries), transcriptPath: undefined, cwd, sessionId: undefined, action: undefined, extra: undefined };
+  const built = buildState(options as unknown as Parameters<typeof buildState>[0]);
+  return built as { state: unknown; sizes: Record<string, number> };
 }
 
 /** Every option needs a definition Jev can score — same requirement as hooks/ask-jev.mjs. */
@@ -101,7 +117,7 @@ function isScorable(q: PaseoQuestion): boolean {
   return opts.length >= 2 && opts.every((o) => Boolean(o.description?.trim()));
 }
 
-async function decideOne(key: string, q: PaseoQuestion, context: unknown, sizes: Record<string, number>): Promise<PickResult> {
+async function decideOne(key: string, q: PaseoQuestion, context: unknown, sizes: Record<string, number>, meta: Record<string, unknown>): Promise<PickResult> {
   const mode = autonomy();
   const options = q.options ?? [];
   if (q.multiSelect) {
@@ -112,6 +128,7 @@ async function decideOne(key: string, q: PaseoQuestion, context: unknown, sizes:
       "paseo",
       8000,
       sizes,
+      meta,
     );
     return interpretMulti(answers, options, { autonomy: mode, threshold: THRESHOLD });
   }
@@ -122,118 +139,186 @@ async function decideOne(key: string, q: PaseoQuestion, context: unknown, sizes:
     "paseo",
     8000,
     sizes,
+    meta,
   );
   return interpretPick(answers, options, { autonomy: mode, threshold: THRESHOLD });
 }
 
-function answerValue(q: PaseoQuestion, result: PickResult): string {
-  const label = result.label ?? "";
-  if (!q.multiSelect) return label;
-  return label === "none" ? "" : label;
+/** A multiSelect that resolved to zero applying options isn't a usable answer — treat it as a blocker. */
+function isEmptyMultiSelect(q: PaseoQuestion, r: PickResult): boolean {
+  return Boolean(q.multiSelect) && r.outcome === "answered" && r.label === "none";
+}
+
+function blockerReason(q: PaseoQuestion, r: PickResult): string {
+  if (r.outcome !== "answered") return r.outcome;
+  // This question itself was confident — a sibling in the same all-or-nothing request blocked it.
+  return isEmptyMultiSelect(q, r) ? "empty_selection" : "sibling_blocked";
+}
+
+/** Matches the daemon's own join (", ") against the question's known labels, rather than blindly
+ * splitting on every comma — a label that itself contains a comma would otherwise be torn apart. */
+function parseMultiSelectAnswer(raw: string, options: PaseoOption[]): string[] {
+  const labels = new Set(options.map((o) => o.label));
+  if (labels.has(raw)) return [raw];
+  return raw.split(", ").filter((part) => labels.has(part));
+}
+
+function sameAnswers(a: Record<string, string> | undefined, b: Record<string, string>): boolean {
+  if (!a) return false;
+  const ak = Object.keys(a);
+  const bk = Object.keys(b);
+  if (ak.length !== bk.length) return false;
+  return ak.every((k) => a[k] === b[k]);
 }
 
 export function registerPermissionAnswerer(server: PluginServerContext): () => void {
+  const owner = randomUUID();
+
   const offRequested = server.on("agent.permission_requested", async (event, context) => {
     const agent = event.agent as PluginHookAgent;
     const request = event.request as AgentPermissionRequest;
+    const map = inflightMap();
+    sweepStale(map);
     if (request.kind !== "question") return;
 
-    const map = inflightMap();
     const key = `${agent.id}:${request.id}`;
     if (map.has(key)) return; // duplicate delivery — another copy (or an earlier call) already owns this
 
     const questions = ((request.input as { questions?: PaseoQuestion[] } | undefined)?.questions ?? []) as PaseoQuestion[];
-    const tracked: TrackedRequest = { questions, answeredByJev: false, resolved: false, waiters: [] };
+    const repo = remoteOf(agent.cwd) ?? undefined;
+    const tracked: TrackedRequest = {
+      owner,
+      agentId: agent.id,
+      requestId: request.id,
+      cwd: agent.cwd,
+      repo,
+      questions,
+      createdAt: Date.now(),
+      resolved: false,
+      waiters: [],
+    };
     map.set(key, tracked);
 
-    const repo = repoOf(agent.cwd);
-    const meta = { agent: agent.id, ...(repo ? { repo } : {}), request_id: request.id };
-    const deferred = (reason: string) => logEvent({ kind: "decision", source: "paseo", gate: "ask", outcome: "deferred", reason, ...meta });
+    const meta = metaOf(tracked);
+    const deferAll = (reason: string) => logPerQuestion(questions, meta, "deferred", () => reason);
 
     try {
-      if (questions.length === 0 || !questions.every(isScorable)) return deferred("missing_definition");
+      if (questions.length === 0 || !questions.every(isScorable)) return deferAll("missing_definition");
 
       const key2 = apiKey();
-      if (!key2) return deferred("no_key");
+      if (!key2) return deferAll("no_key");
 
       const { state, sizes } = await fetchState(context.paseo, agent.id, agent.cwd);
-      if (!hasContext(state)) return deferred("no_context");
+      if (!hasContext(state)) return deferAll("no_context");
 
       const waitForResolve = new Promise<"resolved">((resolve) => tracked.waiters.push(() => resolve("resolved")));
-      const work = Promise.all(questions.map((q) => decideOne(key2, q, state, sizes).catch((): PickResult => ({ outcome: "error" }))));
+      const work = Promise.all(questions.map((q) => decideOne(key2, q, state, sizes, meta).catch((): PickResult => ({ outcome: "error" }))));
       const winner = await Promise.race([work.then((results) => ({ done: true as const, results })), waitForResolve.then(() => ({ done: false as const }))]);
 
-      const raceLost = () => logEvent({ kind: "decision", source: "paseo", gate: "ask", outcome: "race_lost", ...meta });
-      if (!winner.done || tracked.resolved) return raceLost();
+      if (!winner.done || tracked.resolved) return logPerQuestion(questions, meta, "race_lost", () => undefined);
 
       const results = winner.results;
-      const blocker = results.find((r) => r.outcome !== "answered");
-      if (blocker) return deferred(blocker.outcome);
+      if (results.some((r, i) => r.outcome !== "answered" || isEmptyMultiSelect(questions[i], r))) {
+        return logPerQuestion(questions, meta, "deferred", (q, i) => blockerReason(q, results[i]));
+      }
 
-      if (tracked.resolved) return raceLost(); // recheck right before responding
+      if (tracked.resolved) return logPerQuestion(questions, meta, "race_lost", () => undefined); // recheck right before responding
 
       const answers: Record<string, string> = {};
       questions.forEach((q, i) => {
-        answers[q.question] = answerValue(q, results[i]);
+        answers[q.question] = results[i].label ?? "";
       });
+
+      // Snapshot BEFORE the network call: the resolved handler compares against this, not against
+      // a flag set after respond() returns, so it classifies correctly no matter which arrives first.
+      tracked.jevAnswers = answers;
+      tracked.jevResults = results;
 
       await context.paseo.agents.ref(agent.id).respondToPermission({ requestId: request.id, response: { behavior: "allow", updatedInput: { answers } } });
-      tracked.answeredByJev = true;
-
-      questions.forEach((q, i) => {
-        const r = results[i];
-        logEvent({ kind: "decision", source: "paseo", gate: "ask", outcome: "answered", question: q.question, label: r.label, confidence: r.confidence, ...meta });
-      });
-
-      try {
-        const timeline = context.paseo.agents.ref(agent.id).timeline;
-        for (const [i, q] of questions.entries()) {
-          const r = results[i];
-          await timeline.append({
-            type: "plugin",
-            id: randomUUID(),
-            kind: "ask-jev.decision",
-            version: 1,
-            data: { text: `Jev chose "${r.label}" (${(r.confidence ?? 0).toFixed(2)})`, question: q.question, label: r.label ?? "", confidence: r.confidence ?? 0 },
-          });
-        }
-      } catch {
-        /* timeline reporting is best-effort — the answer itself already landed */
-      }
+      // Do NOT log "answered" or append the timeline here — respondToPermission succeeding is not
+      // proof it took effect (a stale respond to an already-resolved request also "succeeds"). The
+      // resolved handler is the single source of truth: it confirms by comparing resolution.answers
+      // to tracked.jevAnswers, whenever that event actually arrives (sweepStale() logs "unconfirmed"
+      // if it never does).
     } catch {
-      logEvent({ kind: "diagnostic", source: "paseo", gate: "ask", outcome: "error", ...meta });
+      logPerQuestion(questions, meta, "error", () => undefined);
     }
   });
 
-  const offResolved = server.on("agent.permission_resolved", async (event) => {
-    const agent = event.agent as PluginHookAgent;
-    const { requestId, resolution } = event as { requestId: string; resolution: AgentPermissionResponse };
-    const map = inflightMap();
-    const key = `${agent.id}:${requestId}`;
-    const tracked = map.get(key);
-    if (!tracked) return; // not a question request this plugin tracked
+  const offResolved = server.on("agent.permission_resolved", async (event, context) => {
+    try {
+      const agent = event.agent as PluginHookAgent;
+      const { requestId, resolution } = event as { requestId: string; resolution: AgentPermissionResponse };
+      const map = inflightMap();
+      sweepStale(map);
+      const key = `${agent.id}:${requestId}`;
+      const tracked = map.get(key);
+      if (!tracked) return; // not a question request this plugin tracked
 
-    tracked.resolved = true;
-    tracked.waiters.forEach((w) => w());
+      tracked.resolved = true;
+      tracked.waiters.forEach((w) => w());
+      map.delete(key);
 
-    if (!tracked.answeredByJev && resolution.behavior === "allow") {
-      const answers = ((resolution as { updatedInput?: { answers?: Record<string, string> } }).updatedInput?.answers ?? {}) as Record<string, string>;
-      for (const q of tracked.questions) {
-        const chosenRaw = answers[q.question];
-        if (chosenRaw === undefined) continue;
-        const chosen = q.multiSelect ? chosenRaw.split(",").map((s) => s.trim()).filter(Boolean) : [chosenRaw];
-        logEvent({ kind: "user_choice", source: "paseo", agent: agent.id, question: q.question, options: (q.options ?? []).map((o) => o.label), chosen });
+      if (resolution.behavior !== "allow") return; // nothing chosen to attribute either way
+
+      const resolvedAnswers = ((resolution as { updatedInput?: { answers?: Record<string, string> } }).updatedInput?.answers ?? {}) as Record<string, string>;
+      const meta = metaOf(tracked);
+
+      if (sameAnswers(tracked.jevAnswers, resolvedAnswers) && tracked.jevResults) {
+        const results = tracked.jevResults;
+        tracked.questions.forEach((q, i) => {
+          const r = results[i];
+          logEvent({ kind: "decision", source: "paseo", gate: "ask", outcome: "answered", question: q.question, label: r.label, confidence: r.confidence, ...meta });
+        });
+        try {
+          const timeline = context.paseo.agents.ref(agent.id).timeline;
+          for (const [i, q] of tracked.questions.entries()) {
+            const r = results[i];
+            await timeline.append({
+              type: "plugin",
+              id: randomUUID(),
+              kind: "ask-jev.decision",
+              version: 1,
+              data: { text: `Jev chose "${r.label}" (${(r.confidence ?? 0).toFixed(2)})`, question: q.question, label: r.label ?? "", confidence: r.confidence ?? 0 },
+            });
+          }
+        } catch {
+          /* timeline reporting is best-effort — the confirmed decision is already logged */
+        }
+        return;
       }
+
+      // Either Jev never answered this one, or the daemon's real resolution doesn't match what we
+      // sent (our respond was a stale no-op on an already-resolved request) — either way, these are
+      // the human's real answers taking effect, so they're the provenance worth recording.
+      for (const q of tracked.questions) {
+        const chosenRaw = resolvedAnswers[q.question];
+        if (chosenRaw === undefined) continue;
+        const chosen = q.multiSelect ? parseMultiSelectAnswer(chosenRaw, q.options ?? []) : [chosenRaw];
+        logEvent({
+          kind: "user_choice",
+          source: "paseo",
+          agent: agent.id,
+          cwd: tracked.cwd,
+          ...(tracked.repo ? { repo: tracked.repo } : {}),
+          question: q.question,
+          options: (q.options ?? []).map((o) => o.label),
+          chosen,
+        });
+      }
+    } catch {
+      logEvent({ kind: "diagnostic", source: "paseo", gate: "ask", outcome: "error" });
     }
-    map.delete(key);
   });
 
   return () => {
     offRequested();
     offResolved();
-    // Unstick any in-flight Jev work this process started so it never calls respondToPermission
-    // after unload — it will just log race_lost and leave the request for the user, same as today.
+    // Unstick any in-flight Jev work THIS instance started so it never calls respondToPermission
+    // after unload — it'll just log race_lost and leave the request for the user. Entries owned by
+    // the other installed copy (if any) are left alone; they're that copy's responsibility.
     for (const tracked of inflightMap().values()) {
+      if (tracked.owner !== owner) continue;
       tracked.resolved = true;
       tracked.waiters.forEach((w) => w());
     }

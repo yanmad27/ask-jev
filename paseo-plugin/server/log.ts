@@ -68,7 +68,7 @@ function logPath(): string {
 // ponytail: remote cached per cwd for the server's lifetime — `paseo plugin reload ask-jev` after changing a remote.
 const remotes = new Map<string, string | null>();
 
-function remoteOf(cwd: string): string | null {
+export function remoteOf(cwd: string): string | null {
   let url = remotes.get(cwd);
   if (url === undefined) {
     try {

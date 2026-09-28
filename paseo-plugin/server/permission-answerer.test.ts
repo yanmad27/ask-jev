@@ -46,7 +46,10 @@ interface MockPaseo {
   appended: unknown[];
 }
 
-function makeContext(timelineEntries: unknown[] | (() => Promise<unknown[]>), respondFails = false): MockPaseo {
+function makeContext(
+  timelineEntries: unknown[] | (() => Promise<unknown[]>),
+  opts: { onRespond?: () => Promise<void> | void } = {},
+): MockPaseo {
   const responded: Array<{ requestId: string; response: unknown }> = [];
   const appended: unknown[] = [];
   const handle = {
@@ -57,9 +60,11 @@ function makeContext(timelineEntries: unknown[] | (() => Promise<unknown[]>), re
         return { seq: appended.length, epoch: "e1" };
       },
     },
-    respondToPermission: async (opts: { requestId: string; response: unknown }) => {
-      if (respondFails) throw new Error("respond failed");
-      responded.push(opts);
+    respondToPermission: async (respondOpts: { requestId: string; response: unknown }) => {
+      // Simulates the daemon delivering agent.permission_resolved before (or instead of) letting
+      // our own respondToPermission call return — the real race this plugin has to survive.
+      if (opts.onRespond) await opts.onRespond();
+      responded.push(respondOpts);
     },
   };
   return { paseo: { agents: { ref: () => handle } }, responded, appended };
@@ -80,7 +85,7 @@ function mockFetch(answersFor: (body: { questions: Record<string, unknown>; stat
 // Confident boolean answers: low personal/destructive, high grounded (irrelevant unless personal fires).
 const SAFE_BOOLEANS = { personal: { noul: 0.1 }, destructive: { noul: 0.05 }, grounded: { noul: 0.9 } };
 
-test("confident single-select: one respondToPermission with the picked label, decision + timeline logged", async () => {
+test("confident single-select: respond, then confirmation via the resolved event logs decision + timeline", async () => {
   const { server, handlers } = makeServer();
   const cleanup = registerPermissionAnswerer(server);
   const ctx = makeContext(withUserMessage);
@@ -91,10 +96,19 @@ test("confident single-select: one respondToPermission with the picked label, de
 
   assert.equal(calls.length, 1);
   assert.equal(ctx.responded.length, 1);
+  const q = requestedSingle.request.input.questions[0].question;
   assert.deepEqual(ctx.responded[0], {
     requestId: requestedSingle.request.id,
-    response: { behavior: "allow", updatedInput: { answers: { [requestedSingle.request.input.questions[0].question]: "Red" } } },
+    response: { behavior: "allow", updatedInput: { answers: { [q]: "Red" } } },
   });
+
+  // Nothing is logged as "answered" yet — only the resolved event, echoing back our own answers,
+  // confirms it actually took effect.
+  assert.equal(readLog().filter((e) => e.kind === "decision" && e.request_id === requestedSingle.request.id).length, 0);
+  assert.equal(ctx.appended.length, 0);
+
+  await handlers["agent.permission_resolved"]({ agent: requestedSingle.agent, requestId: requestedSingle.request.id, resolution: { behavior: "allow", updatedInput: { answers: { [q]: "Red" } } } }, ctx);
+
   assert.equal(ctx.appended.length, 1);
   assert.match((ctx.appended[0] as { data: { text: string } }).data.text, /Jev chose "Red" \(0\.95\)/);
 
@@ -103,11 +117,12 @@ test("confident single-select: one respondToPermission with the picked label, de
   assert.equal(decisions[0].outcome, "answered");
   assert.equal(decisions[0].source, "paseo");
   assert.equal(decisions[0].agent, requestedSingle.agent.id);
+  assert.equal(readLog().filter((e) => e.kind === "user_choice").length, 0);
 
   cleanup();
 });
 
-test("confident multi-question request: a single respond carries answers for both questions", async () => {
+test("confident multi-question request: a single respond carries answers for both questions; confirmation logs both", async () => {
   const { server, handlers } = makeServer();
   registerPermissionAnswerer(server);
   const ctx = makeContext(withUserMessage);
@@ -123,7 +138,10 @@ test("confident multi-question request: a single respond carries answers for bot
   const answers = (ctx.responded[0].response as { updatedInput: { answers: Record<string, string> } }).updatedInput.answers;
   assert.equal(answers[q1.question], "Apple");
   assert.equal(answers[q2.question], "Summer");
+
+  await handlers["agent.permission_resolved"]({ agent: requestedMulti.agent, requestId: requestedMulti.request.id, resolution: { behavior: "allow", updatedInput: { answers } } }, ctx);
   assert.equal(ctx.appended.length, 2);
+  assert.equal(readLog().filter((e) => e.kind === "decision" && e.outcome === "answered" && e.request_id === requestedMulti.request.id).length, 2);
 });
 
 test("confident multiSelect: respond joins the selected labels with a comma", async () => {
@@ -139,11 +157,11 @@ test("confident multiSelect: respond joins the selected labels with a comma", as
   assert.equal(answers[requestedMultiselect.request.input.questions[0].question], "Apple, Cherry");
 });
 
-test("one low-confidence question defers the whole request — all or nothing, no respond", async () => {
+test("one low-confidence question defers the whole request — all or nothing, no respond, both questions logged", async () => {
   const { server, handlers } = makeServer();
   registerPermissionAnswerer(server);
   const ctx = makeContext(withUserMessage);
-  const [q1] = requestedPartial.request.input.questions;
+  const [q1, q2] = requestedPartial.request.input.questions;
   mockFetch((body) => {
     const pending = (body.state as { pendingQuestion: string }).pendingQuestion;
     const confident = pending === q1.question;
@@ -154,9 +172,11 @@ test("one low-confidence question defers the whole request — all or nothing, n
 
   assert.equal(ctx.responded.length, 0);
   const decisions = readLog().filter((e) => e.kind === "decision" && e.request_id === requestedPartial.request.id);
-  assert.equal(decisions.length, 1);
-  assert.equal(decisions[0].outcome, "deferred");
-  assert.equal(decisions[0].reason, "low_confidence");
+  assert.equal(decisions.length, 2);
+  assert.deepEqual(decisions.every((d) => d.outcome === "deferred"), true);
+  // The confident question is logged too (comparable rates), tagged as blocked by its sibling.
+  assert.equal(decisions.find((d) => d.question === q1.question)?.reason, "sibling_blocked");
+  assert.equal(decisions.find((d) => d.question === q2.question)?.reason, "low_confidence");
 });
 
 test("destructive question defers, never responds", async () => {
@@ -275,6 +295,121 @@ test("human-resolved question (Jev never answered) logs user_choice", async () =
   assert.equal(choices[0].question, q);
   assert.deepEqual(choices[0].chosen, ["Blue"]);
   assert.deepEqual(choices[0].options, ["Red", "Blue"]);
+  assert.equal(choices[0].cwd, requestedSingle.agent.cwd);
+});
+
+test("multiSelect user_choice matches against known option labels instead of blindly splitting on every comma", async () => {
+  const { server, handlers } = makeServer();
+  registerPermissionAnswerer(server);
+  const ctx = makeContext(withUserMessage);
+  const request = { ...requestedMultiselect.request, id: "permission-human-multiselect-test" };
+
+  delete process.env.TYPESAFE_API_KEY;
+  try {
+    await handlers["agent.permission_requested"]({ agent: requestedMultiselect.agent, request }, ctx);
+  } finally {
+    process.env.TYPESAFE_API_KEY = "tsk_test_dummy";
+  }
+
+  const q = request.input.questions[0].question;
+  await handlers["agent.permission_resolved"]({ agent: requestedMultiselect.agent, requestId: request.id, resolution: { behavior: "allow", updatedInput: { answers: { [q]: "Apple, Cherry" } } } }, ctx);
+
+  const choices = readLog().filter((e) => e.kind === "user_choice");
+  assert.equal(choices.length, 1);
+  assert.deepEqual(choices[0].chosen, ["Apple", "Cherry"]);
+});
+
+test("resolved (with Jev's own answers) arrives WHILE respondToPermission is still pending: confirmed once, never logged as user_choice", async () => {
+  const { server, handlers } = makeServer();
+  registerPermissionAnswerer(server);
+  const request = { ...requestedSingle.request, id: "permission-inflight-jev-test" };
+  const q = request.input.questions[0].question;
+  mockFetch(() => ({ pick: { choice: "o0", probabilities: { o0: 0.95, o1: 0.05 } }, ...SAFE_BOOLEANS }));
+
+  const ctx = makeContext(withUserMessage, {
+    onRespond: async () => {
+      // The daemon resolves (and tells us) before our own respondToPermission call returns.
+      await handlers["agent.permission_resolved"]({ agent: requestedSingle.agent, requestId: request.id, resolution: { behavior: "allow", updatedInput: { answers: { [q]: "Red" } } } }, ctx);
+    },
+  });
+
+  await handlers["agent.permission_requested"]({ agent: requestedSingle.agent, request }, ctx);
+
+  const decisions = readLog().filter((e) => e.kind === "decision" && e.request_id === request.id);
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].outcome, "answered");
+  assert.equal(ctx.appended.length, 1);
+  assert.equal(readLog().filter((e) => e.kind === "user_choice").length, 0);
+});
+
+test("resolved (with the human's DIFFERENT answer) arrives WHILE respondToPermission is pending: our stale respond is a no-op, human's pick is logged as user_choice, no false answered/timeline", async () => {
+  const { server, handlers } = makeServer();
+  registerPermissionAnswerer(server);
+  const request = { ...requestedSingle.request, id: "permission-inflight-human-test" };
+  const q = request.input.questions[0].question;
+  mockFetch(() => ({ pick: { choice: "o0", probabilities: { o0: 0.95, o1: 0.05 } }, ...SAFE_BOOLEANS })); // Jev would pick Red
+
+  const ctx = makeContext(withUserMessage, {
+    onRespond: async () => {
+      // The human already answered "Blue" before our (stale, ultimately no-op) respond lands.
+      await handlers["agent.permission_resolved"]({ agent: requestedSingle.agent, requestId: request.id, resolution: { behavior: "allow", updatedInput: { answers: { [q]: "Blue" } } } }, ctx);
+    },
+  });
+
+  await handlers["agent.permission_requested"]({ agent: requestedSingle.agent, request }, ctx);
+
+  assert.equal(readLog().filter((e) => e.kind === "decision" && e.outcome === "answered" && e.request_id === request.id).length, 0);
+  assert.equal(ctx.appended.length, 0);
+
+  const choices = readLog().filter((e) => e.kind === "user_choice");
+  assert.equal(choices.length, 1);
+  assert.deepEqual(choices[0].chosen, ["Blue"]);
+});
+
+test("empty multiSelect selection (Jev applies no option) defers the whole request instead of sending an empty answer", async () => {
+  const { server, handlers } = makeServer();
+  registerPermissionAnswerer(server);
+  const ctx = makeContext(withUserMessage);
+  mockFetch(() => ({ o0: { noul: 0.05 }, o1: { noul: 0.05 }, o2: { noul: 0.05 }, o3: { noul: 0.05 }, personal: { noul: 0.1 }, destructive: { noul: 0.05 } }));
+
+  const request = { ...requestedMultiselect.request, id: "permission-empty-multiselect-test" };
+  await handlers["agent.permission_requested"]({ agent: requestedMultiselect.agent, request }, ctx);
+
+  assert.equal(ctx.responded.length, 0);
+  const decisions = readLog().filter((e) => e.kind === "decision" && e.request_id === request.id);
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].outcome, "deferred");
+  assert.equal(decisions[0].reason, "empty_selection");
+});
+
+test("an unconfirmed answer (resolved event never arrives) is swept as unconfirmed after its TTL, and stops tracking", async () => {
+  const { server, handlers } = makeServer();
+  registerPermissionAnswerer(server);
+  const ctx = makeContext(withUserMessage);
+  const request = { ...requestedSingle.request, id: "permission-unconfirmed-test" };
+  mockFetch(() => ({ pick: { choice: "o0", probabilities: { o0: 0.95, o1: 0.05 } }, ...SAFE_BOOLEANS }));
+
+  process.env.ASK_JEV_PASEO_TTL_MS = "10";
+  try {
+    await handlers["agent.permission_requested"]({ agent: requestedSingle.agent, request }, ctx);
+    assert.equal(ctx.responded.length, 1);
+    await new Promise((r) => setTimeout(r, 20));
+
+    // Any subsequent permission_requested triggers the lazy sweep; a "tool" kind is ignored for
+    // everything except the sweep itself.
+    await handlers["agent.permission_requested"]({ agent: requestedSingle.agent, request: { ...request, id: "permission-unrelated-sweep-trigger", kind: "tool" } }, ctx);
+  } finally {
+    delete process.env.ASK_JEV_PASEO_TTL_MS;
+  }
+
+  const decisions = readLog().filter((e) => e.kind === "decision" && e.request_id === request.id);
+  assert.equal(decisions.length, 1);
+  assert.equal(decisions[0].outcome, "unconfirmed");
+
+  // The entry was evicted — a resolved event arriving even later must be a silent no-op now.
+  const q = request.input.questions[0].question;
+  await handlers["agent.permission_resolved"]({ agent: requestedSingle.agent, requestId: request.id, resolution: { behavior: "allow", updatedInput: { answers: { [q]: "Red" } } } }, ctx);
+  assert.equal(readLog().filter((e) => e.kind === "user_choice").length, 0);
 });
 
 test("Jev-resolved question never logs user_choice, even when Paseo echoes the resolution back", async () => {
