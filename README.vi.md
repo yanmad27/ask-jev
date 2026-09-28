@@ -507,21 +507,14 @@ github:yanmad27/ask-jev:paseo-plugin
 
 ### Claude Code
 
-1. Làm mới marketplace:
+Chạy trong terminal, **không** phải trong phiên Claude Code:
 
-   ```
-   /plugin marketplace update ask-jev
-   ```
+```bash
+claude plugin update ask-jev@ask-jev
+```
 
-2. Cập nhật plugin — chạy trong terminal, **không** phải trong phiên Claude Code:
-
-   ```bash
-   claude plugin update ask-jev@ask-jev
-   ```
-
-   (Không có lệnh slash `/plugin update`; trong phiên thì `/plugin marketplace
-   update` chỉ làm mới catalog. Auto-update cũng tự lấy bản mới ở nền nếu
-   marketplace đã bật.)
+(Không có lệnh slash `/plugin update`. Auto-update cũng tự lấy bản mới ở nền nếu
+marketplace đã bật.)
 
 File key đã đổi tên `jev-ask.key` → `ask-jev.key`; tên cũ vẫn được đọc như
 fallback, nên không cần migrate gì cả. Khởi động lại Claude Code sau khi
