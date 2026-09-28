@@ -8,6 +8,7 @@ import { autonomy } from "./vendor/gate.mjs";
 import { env } from "./vendor/env.mjs";
 import { buildPickQuestions, buildMultiQuestions, interpretPick, interpretMulti, pickCriteria } from "./vendor/answer-policy.mjs";
 import { remoteOf } from "./log";
+import { ASK_JEV_TIMELINE_KIND, ASK_JEV_TIMELINE_VERSION } from "../shared/contracts";
 
 const THRESHOLD = Number(env("ASK_THRESHOLD", "0.8"));
 // ponytail: swept lazily whenever a request comes in or resolves; a live daemon gets plenty of
@@ -309,8 +310,8 @@ export function registerPermissionAnswerer(server: PluginServerContext): () => v
             await timeline.append({
               type: "plugin",
               id: randomUUID(),
-              kind: "ask-jev.decision",
-              version: 1,
+              kind: ASK_JEV_TIMELINE_KIND,
+              version: ASK_JEV_TIMELINE_VERSION,
               data: { text: `Jev chose "${r.label}" (${(r.confidence ?? 0).toFixed(2)})`, question: q.question, label: r.label ?? "", confidence: r.confidence ?? 0 },
             });
           }

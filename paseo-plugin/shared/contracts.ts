@@ -64,3 +64,15 @@ export const jevDecisionRpc = defineRpc({
   input: z.object({ event_id: z.string().optional(), ts: z.string(), gate: z.string().optional() }),
   output: z.record(z.string(), z.unknown()).nullable(),
 });
+
+// The `data` shape server/permission-answerer.ts appends via timeline.append({type:"plugin", ...}).
+// A plugin timeline item needs a matching client.addTimelineRenderer (kind+version+schema) to
+// render at all — see index.client.tsx — otherwise Paseo has nothing to display it with.
+export const ASK_JEV_TIMELINE_KIND = "ask-jev.decision";
+export const ASK_JEV_TIMELINE_VERSION = 1;
+export const AskJevTimelineDataSchema = z.object({
+  text: z.string(),
+  question: z.string(),
+  label: z.string(),
+  confidence: z.number(),
+});
