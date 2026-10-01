@@ -79,7 +79,7 @@ test("user_decision_action: actions the user decides reject; classification of f
     ["Should I reply to the thread with the fix?", bool],
   ];
   for (const [q, mk] of rejects) assert.ok(has(req('{"diff":"x"}', { q: mk(q) }), "user_decision_action", "reject"), q);
-  const optionSets = [["merge_now", "wait"], ["push", "hold"], ["force_push", "rebase"], ["submit_pr", "keep_local"], ["close_pr", "leave_open"], ["send_email", "draft_only"], ["upload", "skip"], ["invite_user", "skip"], ["purchase", "skip"], ["Push to origin", "Stay local"], ["do_not_push", "go"]];
+  const optionSets = [["merge_now", "wait"], ["force_push", "rebase"], ["submit_pr", "keep_local"], ["close_pr", "leave_open"], ["send_email", "draft_only"], ["invite_user", "skip"], ["Push to origin", "Stay local"], ["do_not_push", "go"]];
   for (const labels of optionSets) assert.ok(has(req('{"diff":"x"}', { q: choice("What next?", labels) }), "user_decision_action", "reject"), labels.join());
   const passes = [
     bool("Does this diff touch deploy scripts?"),
@@ -154,6 +154,31 @@ test("round 3: 'proceed with / go ahead with / carry out / do the <action noun>'
     assert.deepEqual(classes({ state: { diff: "x" }, questions: { q: mk(yes) } }), ["ambiguous_action:flag"], yes);
   }
   assert.deepEqual(classes({ state: { diff: "x" }, questions: { q: mk("Proceed with the analysis") } }), []);
+});
+
+test("round 4 (1): ANY single-word bare label under a neutral classification flags ambiguous_action; framing and verb+object labels still reject", () => {
+  for (const [question, labels] of [["Classify this git operation", ["push", "pull", "fetch"]], ["Classify the cleanup", ["delete", "archive"]], ["Classify the request", ["upload", "download"]], ["Classify the contact", ["invite", "remove"]], ["Classify the order", ["purchase", "refund"]], ["Classify the step", ["release", "deploy", "merge"]]]) {
+    assert.deepEqual(classes(req('{"op":"git push origin main"}', { q: choice(question, labels) })), ["ambiguous_action:flag"], labels.join());
+  }
+  assert.ok(has(req('{"op":"x"}', { q: choice("Should I push?", ["yes", "no"]) }), "user_decision_action", "reject"));
+  assert.ok(has(req('{"op":"x"}', { q: choice("Should I push?", ["push", "wait"]) }), "user_decision_action", "reject"));
+  for (const labels of [["merge_now", "wait"], ["submit_pr", "keep"], ["send_email", "draft"], ["force_push", "rebase"], ["do_not_push", "go"], ["Push to origin", "Stay local"]]) {
+    assert.ok(has(req('{"op":"x"}', { q: choice("Classify the step", labels) }), "user_decision_action", "reject"), labels.join());
+  }
+});
+
+test("round 4 (2): examples are inspected (flag), every criteria/instructions string is size-guarded, instructions.detail is scanned for decision framing", () => {
+  const mk = (extra) => ({ type: "choice", instructions: { question: "Which next step?" }, criteria: { yes: { what: "The next step", not_for: "no", examples: extra.yes ?? ["x"] }, no: { what: "Keep it local", not_for: extra.notFor ?? "yes", examples: extra.no ?? ["y"] } } });
+  assert.deepEqual(classes({ state: { d: "x" }, questions: { q: mk({ yes: ["Proceed with the deployment"] }) } }), ["ambiguous_action:flag"]);
+  assert.deepEqual(classes({ state: { d: "x" }, questions: { q: mk({ yes: ["Push to origin"] }) } }), ["ambiguous_action:flag"]);
+  assert.ok(has({ state: { d: "x" }, questions: { q: mk({ notFor: "n".repeat(5000) }) } }, "oversized_text", "reject"));
+  assert.ok(has({ state: { d: "x" }, questions: { q: mk({ yes: ["e".repeat(5000)] }) } }, "oversized_text", "reject"));
+  const pad = "word ".repeat(1000) + "Should I merge now?";
+  const withDetail = (detail) => ({ type: "boolean", instructions: { question: "Is `d` ok?", detail }, criteria: { true: "yes", false: "no" } });
+  assert.ok(has({ state: { d: "x" }, questions: { q: withDetail("Should I merge now?") } }, "user_decision_action", "reject"));
+  assert.ok(has({ state: { d: "x" }, questions: { q: withDetail(pad) } }, "oversized_text", "reject"));
+  assert.ok(has({ state: { d: "x" }, questions: { q: { type: "boolean", instructions: { question: "Is `d` ok?", nested: { more: pad } }, criteria: { true: "yes", false: "no" } } } }, "oversized_text", "reject"));
+  assert.ok(has({ state: { d: "x" }, questions: { q: { type: "boolean", instructions: ["Is `d` ok?", pad], criteria: { true: "yes", false: "no" } } } }, "oversized_text", "reject"));
 });
 
 test("round 2 (2): 'should my/our X be accepted/approved/merged…' and 'is my X ready/good enough' reject self_judgement", () => {
