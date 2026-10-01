@@ -797,3 +797,21 @@ test("options sharing a 70-char prefix stay distinguishable: data carries the fu
   await handlers["agent.permission_resolved"](resolvedEvent(request, { "q?": `${prefix} beta\u0007` }), ctx);
   assert.equal(rowsOf("outcome", request)[0].agreement, "agree");
 });
+
+test("advice data and text strip bidi overrides, zero-width and C1 control characters from agent-authored text", async () => {
+  const { server, handlers } = makeServer();
+  registerPermissionAnswerer(server);
+  const ctx = makeContext(withUserMessage);
+  const label = "Re\u202Ed\u200B\u0085x\u2066y\uFEFF";
+  const request = freshRequest({
+    ...requestedSingle.request,
+    input: { questions: [{ question: "q\u202E?", options: [{ label, description: "de\u202Esc\u200B" }, { label: "Blue", description: "b" }] }] },
+  });
+  mockFetch(() => SINGLE_PICK);
+  await handlers["agent.permission_requested"]({ agent: AGENT, request }, ctx);
+  const data = adviceData(ctx.appended[0]);
+  assert.deepEqual(data.recommended, ["Redxy"]);
+  assert.equal(data.reason, "desc [grounded in your messages/past choices]");
+  assert.equal(data.question, "q?");
+  assert.doesNotMatch(JSON.stringify(data), /[\u0080-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/);
+});

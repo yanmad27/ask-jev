@@ -145,7 +145,10 @@ const UNAVAILABLE_NOTE: Record<string, string> = {
 };
 
 const LABEL_CAP = 60;
-const flatten = (text: string) => text.replace(/[\u0000-\u001f\u007f\s]+/g, " ").trim();
+// Agent-authored text: drop C0/C1 controls, zero-width and bidi-override/isolate characters (a U+202E in
+// a label could otherwise reorder the advice line, confidence text included), then collapse whitespace.
+const INVISIBLE = /[\u0080-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+const flatten = (text: string) => text.replace(INVISIBLE, "").replace(/[\u0000-\u001f\u007f\s]+/g, " ").trim();
 const oneLine = (text: string, max: number) => cap(flatten(text), max);
 
 /** Plain-text fallback only — the client renders recommendation, confidence and the option's own
