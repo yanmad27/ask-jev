@@ -148,6 +148,7 @@ test("single question: one advice timeline item with the exact payload, decision
     question_count: 1,
     status: "advised",
     recommended: ["Red"],
+    recommended_index: [0],
     confidence: 0.95,
     strength: "strong",
     reason: "A warm primary color [grounded in your messages/past choices]",
@@ -650,7 +651,9 @@ test("advice line: long labels are capped and newlines flattened; confidence/des
   await handlers["agent.permission_requested"]({ agent: AGENT, request }, ctx);
   const data = adviceData(ctx.appended[0]);
   const [label] = data.recommended as string[];
-  assert.ok(label.length <= 60 && !label.includes("\n"));
+  assert.ok(!label.includes("\n"));
+  assert.match(String(data.text), /Jev advice: "Red/);
+  assert.ok(String(data.text).length < 400, "plain-text fallback stays truncated");
   assert.doesNotMatch(String(data.reason), /\n/);
   assert.equal(data.confidence, 0.95);
   assert.equal(data.strength, "strong");
@@ -774,4 +777,23 @@ test("a failing timeline.append is logged and the outcome treats the advice as n
 
   assert.ok(readLog().some((e) => e.kind === "diagnostic" && e.outcome === "advice_append_failed"));
   assert.deepEqual([rowsOf("outcome", request)[0].advice_shown, rowsOf("outcome", request)[0].agreement], [false, "no_advice"]);
+});
+
+test("options sharing a 70-char prefix stay distinguishable: data carries the full label and the option index", async () => {
+  const { server, handlers } = makeServer();
+  registerPermissionAnswerer(server);
+  const ctx = makeContext(withUserMessage);
+  const prefix = "P".repeat(70);
+  const request = freshRequest({
+    ...requestedSingle.request,
+    input: { questions: [{ question: "q?", options: [{ label: `${prefix} alpha`, description: "a" }, { label: `${prefix} beta\u0007`, description: "b" }] }] },
+  });
+  mockFetch(() => ({ pick: { choice: "o1", probabilities: { o0: 0.1, o1: 0.9 } }, grounded: { noul: 0.9 } }));
+  await handlers["agent.permission_requested"]({ agent: AGENT, request }, ctx);
+  const data = adviceData(ctx.appended[0]);
+  assert.deepEqual(data.recommended, [`${prefix} beta`]);
+  assert.deepEqual(data.recommended_index, [1]);
+  assert.ok(String(data.text).length < 400);
+  await handlers["agent.permission_resolved"](resolvedEvent(request, { "q?": `${prefix} beta\u0007` }), ctx);
+  assert.equal(rowsOf("outcome", request)[0].agreement, "agree");
 });

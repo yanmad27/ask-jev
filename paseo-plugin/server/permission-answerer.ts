@@ -145,7 +145,8 @@ const UNAVAILABLE_NOTE: Record<string, string> = {
 };
 
 const LABEL_CAP = 60;
-const oneLine = (text: string, max: number) => cap(text.replace(/\s+/g, " ").trim(), max);
+const flatten = (text: string) => text.replace(/[\u0000-\u001f\u007f\s]+/g, " ").trim();
+const oneLine = (text: string, max: number) => cap(flatten(text), max);
 
 /** Plain-text fallback only — the client renders recommendation, confidence and the option's own
  * description as separate spans, so an agent-authored label/description cannot pose as Jev's
@@ -223,10 +224,14 @@ async function adviseRequest(tracked: TrackedRequest, context: { paseo: PaseoApi
     let record: AdviceRecord | undefined;
 
     if (r.outcome === "advised") {
-      const recommended = r.recommended.map((l) => oneLine(l, LABEL_CAP));
+      // Full labels (control chars flattened) + option indexes stay in the structured data so options
+      // sharing a long prefix remain distinguishable; only the plain-text fallback is truncated.
+      const options = q.options ?? [];
+      const recommended = r.recommended.map(flatten);
+      const recommendedIndex = r.recommended.map((l) => options.findIndex((o) => o.label === l));
       const reason = oneLine(r.reason, QUESTION_CAP);
-      const text = adviceText(recommended, r.confidence, reason, r.strength);
-      data = { ...base, text, status: "advised", recommended, confidence: r.confidence, strength: r.strength as "strong" | "weak", reason };
+      const text = adviceText(recommended.map((l) => cap(l, LABEL_CAP)), r.confidence, reason, r.strength);
+      data = { ...base, text, status: "advised", recommended, recommended_index: recommendedIndex, confidence: r.confidence, strength: r.strength as "strong" | "weak", reason };
       decision = { outcome: "advised", recommended: r.recommended, confidence: r.confidence, strength: r.strength, grounded: r.grounded, reason: r.reason, advice_text: cap(text, QUESTION_CAP), display: "timeline" };
       record = { recommended: r.recommended, confidence: r.confidence, state: "pending" };
       tracked.advice[i] = record;
@@ -236,7 +241,7 @@ async function adviseRequest(tracked: TrackedRequest, context: { paseo: PaseoApi
         continue; // no key is configuration absence, not a failure worth a timeline item
       }
       const billingNote = r.reason === "billing" && Boolean(outcomes[i].billingNotice);
-      data = { ...base, text: unavailableText(r.reason, billingNote), status: "unavailable", recommended: [], confidence: null, reason: r.reason };
+      data = { ...base, text: unavailableText(r.reason, billingNote), status: "unavailable", recommended: [], recommended_index: [], confidence: null, reason: r.reason };
       decision = { outcome: "advice_unavailable", reason: r.reason, note_shown: true };
     }
 

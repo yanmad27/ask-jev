@@ -115,6 +115,7 @@ export const AskJevAdviceDataSchema = z.object({
   question_count: z.number().optional(),
   status: z.enum(["advised", "unavailable"]),
   recommended: z.array(z.string()),
+  recommended_index: z.array(z.number()).optional(),
   confidence: z.number().nullable(),
   strength: z.enum(["strong", "weak"]).optional(),
   reason: z.string(),
