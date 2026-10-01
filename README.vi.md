@@ -14,19 +14,23 @@
 
 **Hỏi [Jev](https://typesafe.ai) trước khi hỏi bạn.**
 
-Claude Code hay dừng lại hỏi bạn (`AskUserQuestion`) cả những câu mà đáp án đã
-nằm sẵn trong cuộc hội thoại. ask-jev chặn câu hỏi đó lại, đưa cho Jev — một
-model nhỏ, nhanh, chuyên phán đoán thay vì trò chuyện, trả về xác suất thay vì
-chữ — và tự trả lời khi đáp án rõ ràng suy ra được.
-
-Câu nào thật sự thuộc về bạn thì vẫn tới tay bạn, y như cũ.
+Claude Code hay dừng lại hỏi bạn (`AskUserQuestion`), và đáp án nhiều khi đã
+nằm sẵn trong cuộc hội thoại. ask-jev đưa câu hỏi đó cho Jev — một model nhỏ,
+nhanh, chuyên phán đoán thay vì trò chuyện, trả về xác suất thay vì chữ — rồi
+hiện đề xuất của Jev ngay cạnh câu hỏi. **Jev đề xuất; bạn quyết định.** Jev
+không bao giờ trả lời `AskUserQuestion` thay bạn và không bao giờ chặn nó: câu
+hỏi luôn tới tay bạn, nguyên vẹn.
 
 ```
-"Dùng thư viện nào để parse ngày?"     → tự chọn date-fns (1.00)   — đã có trong package.json
-"Đóng gói thành plugin hay skill?"     → tự chọn Plugin  (0.95)
-"Bạn muốn giao diện tông màu nào?"     → hỏi bạn                   — sở thích
-"Có xoá luôn 3 environment cũ không?"  → hỏi bạn                   — không hoàn tác được
+"Dùng thư viện nào để parse ngày?"     → Jev đề xuất: date-fns (1.00) — đã có trong package.json
+"Đóng gói thành plugin hay skill?"     → Jev đề xuất: Plugin (0.95)
+"Bạn muốn giao diện tông màu nào?"     → Jev nghiêng về: Teal (0.55) — no direct statement from you — a guess
+"Có xoá luôn 3 environment cũ không?"  → Jev đề xuất: Giữ lại (0.88) — và bạn vẫn là người quyết
 ```
+
+(Dòng đề xuất mà hook của Claude Code hiển thị bằng tiếng Việt: `đề xuất` =
+"recommends", `nghiêng về` = "leans towards"; phần `<reason>` giữ nguyên
+tiếng Anh như mô tả option và tag.)
 
 ## Cài đặt
 
@@ -58,130 +62,162 @@ vẫn hỏi bạn y hệt như trước giờ. Không có gì để hỏng cả.
 
 ## Bạn sẽ thấy gì
 
-Khi Jev trả lời một câu hỏi thay bạn, nó hiện lên như một dòng duy nhất
-trong session — `✓ Jev answered for you: ...` — rồi Claude tiếp tục làm như thể chính
-bạn vừa gõ câu trả lời đó. Mọi thứ khác (câu hỏi thuộc về bạn, hoặc Jev
-không chắc chắn) vẫn tới tay bạn như bình thường.
+Khi Claude hỏi bạn một câu, ask-jev thêm một dòng đề xuất cho mỗi câu hỏi
+vào session:
+
+```
+Jev đề xuất: Plugin (0.95) — A packaged bundle of hooks, skills and commands [grounded in your messages/past choices]
+Jev nghiêng về: Teal (0.55) — A calm blue-green accent [no direct statement from you — a guess]
+```
+
+- **`Jev đề xuất: X (0.86) — <reason>`** — độ tin của Jev vào `X` bằng hoặc
+  cao hơn `ASK_JEV_ASK_THRESHOLD` (mặc định `0.8`).
+- **`Jev nghiêng về: X (0.55) — <reason>`** — đề xuất yếu: dưới ngưỡng đó.
+- **`<reason>` không phải lời giải thích của Jev** — classifier chỉ trả về
+  xác suất, không trả về chữ. Đó là mô tả của chính option được đề xuất, cộng
+  một tag cho biết lời của bạn hoặc lựa chọn trong quá khứ có làm căn cứ cho
+  pick hay không (`grounded in your messages/past choices`) hay chỉ là đoán
+  (`no direct statement from you — a guess`). Tối đa 160 ký tự.
+- **Nếu Jev lỗi** (lỗi provider, timeout, hết credits) câu hỏi tới tay bạn
+  nguyên vẹn, kèm một ghi chú: `Jev: không có đề xuất (lỗi <status>) — bạn tự quyết`.
+  Lỗi billing / HTTP 402 nói `hết credits — credits exhausted` đúng một lần
+  mỗi session, sau đó là ghi chú chung.
+- **Chưa đặt API key** → hoàn toàn im lặng.
+
+Câu hỏi không bao giờ bị trả lời hay từ chối. Chỉ kênh `annotate` (tuỳ chọn,
+bên dưới) mới đụng tới nội dung câu hỏi, để thêm đề xuất vào đó. Các ví dụ
+ở trên chỉ mang tính minh hoạ.
 
 ## Cách hoạt động
 
 Bốn lớp xếp chồng lên nhau:
 
-1. **[Tự trả lời `AskUserQuestion`](#1-tự-trả-lời-askuserquestion)** — tính
-   năng cốt lõi ở trên.
+1. **[Đề xuất cho `AskUserQuestion`](#1-đề-xuất-cho-askuserquestion)** — tính
+   năng cốt lõi ở trên: Jev đề xuất, bạn trả lời.
 2. **[Hỏi Jev trước khi phán đoán](#2-hỏi-jev-trước-khi-phán-đoán)** —
-   Claude được nhắc hỏi Jev cho *mọi* phán đoán, không chỉ
-   `AskUserQuestion`, qua một skill và CLI đi kèm.
+   Claude có thể hỏi Jev qua CLI cho các phán đoán *nội bộ* của chính nó
+   (chọn model/tier nào, phân loại một thứ) — không bao giờ cho việc thuộc về
+   bạn quyết.
 3. **[Các gate tự động](#3-các-gate-tự-động)** — bốn hook chủ động hỏi Jev
    đúng những lúc một reviewer con người sẽ lên tiếng: lệnh này có an toàn
    không, assistant có dừng quá sớm không, lệnh có chạy thành công không,
    prompt có mơ hồ không.
-4. **[Autonomy](#4-autonomy)** — ask-jev tự hành động thay vì hỏi bạn tới
+4. **[Autonomy](#4-autonomy)** — các *gate* tự hành động thay vì hỏi bạn tới
    mức nào, với một lằn ranh không bao giờ tắt: bất cứ gì có tính phá huỷ
    luôn được đưa về cho bạn quyết.
 
-### 1. Tự trả lời `AskUserQuestion`
+### 1. Đề xuất cho `AskUserQuestion`
 
-Trước khi Claude Code hiện câu hỏi cho bạn, ask-jev gửi nó cho Jev để phán
-đoán hai việc:
+Khi Claude Code sắp hiện một câu hỏi cho bạn, ask-jev gửi nó cho Jev cùng
+với ngữ cảnh session, và Jev chấm điểm từng option. **Jev không bao giờ trả
+lời.** Nó không thể chọn một option, từ chối tool, hay trả một kết quả về cho
+Claude — hook `PreToolUse` chỉ thêm thông tin, không làm gì khác.
 
-1. **Đây có phải là việc của bạn để quyết không?** Bất cứ điều gì không thể
-   hoàn tác (xoá, gửi, publish, tiêu tiền) luôn tới tay bạn — Jev không bao
-   giờ đụng vào, dù đáp án "đúng" có vẻ hiển nhiên tới đâu. Sở thích và ưu
-   tiên cá nhân thì khác: Jev cũng trả lời được, nhưng chỉ khi có **căn cứ**
-   — lời của chính bạn hoặc lựa chọn thật trong quá khứ chỉ rõ một option cụ
-   thể (xem [Autonomy](#4-autonomy) để biết chế độ `safe`, nơi sở thích luôn
-   tới tay bạn).
-2. **Nếu không, đáp án nào đúng** — dựa trên mọi thứ đã nói trong cuộc
-   hội thoại tới giờ?
+Thứ Jev được xem là `state` được mô tả ở mục "Jev được cho xem gì" trong
+[Các gate tự động](#3-các-gate-tự-động): các tin nhắn **bạn đã gõ** (mục `task` chỉ chứa những tin đó — kết quả
+tool và output của chính Claude không nằm trong đó), cuộc hội thoại gần đây,
+file CLAUDE.md và memory của bạn, và **các lựa chọn trong quá khứ** của bạn.
+Hai điều cần biết về lựa chọn trong quá khứ:
 
-Chỉ khi Jev vừa tự tin vừa (không mang tính cá nhân, hoặc có căn cứ từ chính
-bằng chứng của bạn), Claude mới nhận được đáp án một cách âm thầm và tiếp
-tục. Ngược lại, câu hỏi vẫn tới tay bạn y như khi chưa cài ask-jev.
+- chúng được đọc từ [log cục bộ](#usage-analytics) — 30 câu trả lời
+  `AskUserQuestion` gần nhất được ghi ở đó, **trên mọi project và mọi
+  session** của bạn (cùng project trước), không chỉ project hiện tại;
+- nên nội dung câu hỏi và option bạn đã chọn ở một project khác có thể được
+  gửi cho Jev khi bạn đang làm việc ở project này.
 
-**Trong [Paseo](#trong-paseo), cài [Paseo plugin](paseo-plugin/README.md) là
-nó trả lời native — không qua hook, không có `hook error` màu đỏ nào cả.**
-Plugin tự lắng nghe permission request và trả lời bằng `respondToPermission`
-trực tiếp, thay vì một hook Claude Code phải deny tool. Một request có nhiều
-câu hỏi là tất-cả-hoặc-không-gì: nếu Jev bỏ qua dù chỉ một câu, cả request
-tới tay bạn chưa được trả lời, chứ không trả lời một phần. Một đáp án của Jev chỉ được báo lại trong timeline của agent dưới dạng `Jev
-chose "X" (0.93)` MỘT KHI chính sự kiện resolution của Paseo xác nhận nó
-thật sự có hiệu lực — một lần respond trễ vào một request đã resolved vẫn
-"thành công" mà không có tác dụng gì, nên thành công không phải là bằng
-chứng. Đáp án nào không được xác nhận trong một khoảng chờ giới hạn thì được
-ghi là `unconfirmed` thay vào đó, không có dòng timeline nào cả.
-Hook `AskUserQuestion` của Claude Code vẫn đứng im dưới `PASEO_AGENT_ID` dù
-sao đi nữa (ghi log dưới dạng `diagnostic`, không phải `decision`, nên không
-làm lệch số liệu thống kê), nên hai bên không bao giờ giành nhau cùng một
-câu hỏi. Không cài plugin thì mọi câu hỏi trong Paseo vẫn tới tay bạn như
-bình thường — hỏi Jev trực tiếp cho các phán đoán (bên dưới) chạy qua CLI
-nên vẫn hoạt động dù có plugin hay không; panel thống kê vẫn ghi nhận.
+Rồi Jev phán đoán một việc cho mỗi câu hỏi: **dựa trên bằng chứng đó, bạn sẽ
+chọn option nào?** (và liệu lời của chính bạn hoặc lựa chọn trong quá khứ có
+thật sự làm căn cứ cho pick đó không). Không còn bộ lọc "đây có phải việc của
+bạn không?" nữa — câu hỏi về sở thích, cá nhân, thậm chí phá huỷ cũng đều nhận
+được đề xuất, vì bạn là người quyết. Xem [Bạn sẽ thấy gì](#bạn-sẽ-thấy-gì) để
+biết định dạng.
 
-**Giới hạn đã biết:** sự kiện resolution của Paseo không mang theo danh tính
-người trả lời, chỉ có đáp án cuối cùng — nên nếu bạn tình cờ tự trả lời,
-trong khoảng ~1 vòng round-trip RPC đó, đúng bằng (những) option Jev đã
-chọn, nó sẽ được ghi và báo lại như một đáp án của Jev chứ không phải
-`user_choice`. Điều ngược lại không bao giờ xảy ra: đáp án của Jev không bao
-giờ bị ghi thành `user_choice`.
+**Đề xuất tới tay bạn thế nào** là một cài đặt, `ASK_JEV_ADVICE_CHANNEL`:
 
-Plugin cần cùng một Jev API key như các hook — `~/.claude/ask-jev.key`, hoặc
-`TYPESAFE_API_KEY`/`ASK_JEV_API_KEY` — nhưng được đọc từ môi trường và home
-directory của **Paseo daemon**, không phải shell bạn đang gõ lệnh. Nếu bạn
-chỉ export key trong shell rc, daemon có thể không bao giờ thấy nó; file key
-tránh được vấn đề đó. Chỉ nên cài **một** bản plugin: hai bản cùng chạy
-trong một process (vd `ask-jev` và một bản dev cục bộ `ask-jev-dev`) dùng
-chung một dedupe map trong bộ nhớ nên sẽ không cùng trả lời một request,
-nhưng không có lý do gì để chạy hai bản.
+| Kênh | Điều gì xảy ra |
+|---|---|
+| `message` (mặc định) | Một dòng `systemMessage` cho mỗi câu hỏi. Bản thân câu hỏi đi qua nguyên vẹn |
+| `annotate` | Hook trả về `permissionDecision: "ask"` kèm `updatedInput`: dòng đề xuất được nối vào câu hỏi và mô tả của option được đề xuất thêm ` (Jev đề xuất)`. Nó vẫn hỏi bạn — `updatedInput` không mang `answers` |
+
+Với nhiều câu hỏi trong một lời gọi, mỗi câu có một dòng riêng, tiền tố
+`[1/3]`, `[2/3]`, …; câu hỏi `multiSelect` được phán đoán từng option và có
+thể đề xuất nhiều option (hoặc không option nào).
+
+**Trong [Paseo](#trong-paseo), cài [Paseo plugin](paseo-plugin/README.md) —
+nó đề xuất ngay trong app, và vẫn không bao giờ trả lời.** Plugin theo dõi
+permission request đang chờ và thêm một timeline item cho mỗi câu hỏi
+(`ask-jev.advice`) — một item riêng, không phải chữ trên card. Nó không bao
+giờ gọi `respondToPermission` cho một câu hỏi. Nếu Jev lỗi, một item
+`ask-jev.advice` cho biết không có đề xuất (402 thêm rằng credits của Jev đã
+hết, một lần mỗi agent session); thiếu key thì im lặng. Hook `AskUserQuestion`
+của Claude Code đứng im dưới `PASEO_AGENT_ID` (ghi log là `standdown`, không
+phải `decision`) nên hai bên không bao giờ đề xuất đôi. Không có plugin thì câu
+hỏi trong Paseo tới tay bạn không kèm đề xuất.
+
+**Giới hạn đã biết:** một advice item đang được append dở dang khi bạn trả lời
+vẫn có thể hiện ra sau đó (không huỷ được). Câu trả lời của bạn khi đó được ghi
+là `no_advice`, vì lúc bạn chọn thì đề xuất chưa hiện.
+
+Plugin cần cùng API key Jev như các hook — `~/.claude/ask-jev.key`, hoặc
+`TYPESAFE_API_KEY`/`ASK_JEV_API_KEY` — nhưng nó được đọc từ môi trường và
+thư mục home của **Paseo daemon**, không phải shell bạn đang gõ. Nếu bạn
+chỉ export key trong shell rc, daemon có thể không bao giờ thấy được; file
+key tránh được chuyện đó. Chỉ cài **một** bản của plugin: hai bản cùng nạp
+trong một process (ví dụ `ask-jev` và một `ask-jev-dev` cục bộ) dùng chung
+một dedupe map trong bộ nhớ nên chúng không cùng đề xuất cho một request,
+nhưng chẳng có lý do gì để chạy hai bản.
 
 <details>
-<summary>Option cần định nghĩa thật sự, multiSelect, và khi nào nó im lặng</summary>
+<summary>Option cần định nghĩa thật sự, multiSelect, và khi nào không có đề xuất</summary>
 
 **Option cần định nghĩa thật sự.** Để Jev phán đoán được, mỗi option cần một
 mô tả **định nghĩa** nó thật sự — chứ không chỉ là một cái nhãn. Lấy ví dụ
 "Đây có phải hamburger không?" với option chỉ ghi "Có": chẳng có gì để đối
 chiếu cả. "Có" cần một mô tả kiểu *"Một loại sandwich nóng: một miếng thịt
 bằm nấu chín kẹp trong bánh mì tròn cắt đôi"* — thứ mà bạn có thể đem bằng
-chứng ra đối chiếu và kiểm chứng được.
+chứng ra đối chiếu và kiểm chứng được. Mô tả này cũng chính là thứ `<reason>`
+của Jev trích lại cho bạn.
 
-Nếu bất kỳ option nào trong câu hỏi thiếu mô tả, ask-jev không gọi Jev luôn
-— nó trả câu hỏi thẳng về cho Claude kèm hướng dẫn hỏi lại với định nghĩa
-đầy đủ. Không có gì tới tay bạn trong lượt đó; Claude chỉ đơn giản thử lại.
+Nếu bất kỳ option nào trong câu hỏi thiếu mô tả (hoặc câu hỏi có ít hơn hai
+option), ask-jev không gọi Jev cho câu hỏi đó: không thêm đề xuất, không thêm
+ghi chú, và câu hỏi tới tay bạn như Claude đã hỏi. Câu hỏi bị bỏ qua được ghi
+log là `advice_unavailable` (`missing_definition` / `single_option`).
 
 Bên dưới, mỗi option được gửi dưới dạng `{what, not_for}` — `not_for` nêu
-tên những option anh em mà nó không được trùng lặp, để các định nghĩa loại
-trừ lẫn nhau thay vì chỉ nằm cạnh nhau.
+tên các option anh em mà nó không được chồng lấn, để các định nghĩa loại trừ
+lẫn nhau thay vì chỉ nằm cạnh nhau.
 
 **Nhiều câu hỏi, và multiSelect.** Nhiều câu hỏi trong cùng một lời gọi
-`AskUserQuestion` được trả lời độc lập với nhau. Câu nào Jev tự tin thì được
-dùng; số còn lại được trả về cho bạn — lý do Claude nhận lại nêu tên các đáp
-án đã giải quyết và nói chỉ hỏi lại phần còn thiếu, để một đáp án tự tin
-không bao giờ bị bỏ chỉ vì một câu hỏi anh em còn mơ hồ.
+`AskUserQuestion` được đề xuất độc lập; lỗi ở một câu không ảnh hưởng các câu
+khác.
 
 Câu hỏi `multiSelect` cũng đi qua Jev: mỗi option trở thành một câu hỏi
-yes/no riêng ("option này có áp dụng không?") thay vì chọn một. Một option
-được tính là chọn khi xác suất vượt `ASK_JEV_ASK_THRESHOLD`, bị loại khi rơi
-dưới `1 - ASK_JEV_ASK_THRESHOLD`, và cả câu hỏi vẫn chưa giải quyết nếu có
-option nào rơi vào khoảng giữa. Đáp án đã giải quyết là danh sách nhãn được
-chọn, nối bằng dấu phẩy — có thể là "none".
+yes/no riêng ("option này có áp dụng không?") thay vì chọn một. Mọi option từ
+0.5 trở lên đều được đề xuất — có thể không có option nào — và độ tin của đề
+xuất là độ tin của option kém dứt khoát nhất.
 
-**Khi nào nó im lặng.**
+**Khi nào bạn không nhận được đề xuất (hook Claude Code).**
 
-| Điều kiện | Vì sao |
+| Điều kiện | Bạn thấy gì |
 |---|---|
-| mang tính cá nhân và autonomy `safe` (`personal > 0.5`) | đó là việc của bạn, không phải của model |
-| mang tính cá nhân ở autonomy `full` nhưng thiếu căn cứ hoặc độ tin thấp (`grounded` hoặc pick `< ASK_JEV_ASK_THRESHOLD`) | không có bằng chứng thật rằng bạn sẽ chọn một option cụ thể — một prior chung chung không phải là căn cứ |
-| Jev không đủ tự tin (`< ASK_JEV_ASK_THRESHOLD`) | đoán bừa còn tệ hơn hỏi |
-| một option thiếu mô tả | nhãn trơn thì Jev không phán đoán được — trả về cho Claude, không chuyển cho Jev |
-| không có ngữ cảnh dùng được trong transcript | không có gì để Jev đối chiếu |
-| chưa đặt key, Jev lỗi, hoặc mất hơn 8s | một helper hỏng không bao giờ được là lý do bạn không trả lời được |
+| chưa đặt API key | không có gì cả |
+| không có ngữ cảnh dùng được trong transcript | không có gì (log `advice_unavailable: no_context`) |
+| một option thiếu mô tả, hoặc chỉ có một option | không có gì (log `missing_definition` / `single_option`) |
+| Jev lỗi hoặc mất hơn 8s | câu hỏi nguyên vẹn kèm `Jev: không có đề xuất (…) — bạn tự quyết` |
+| chạy trong Paseo | hook Claude Code đứng im; Paseo plugin (nếu có cài) đề xuất thay |
 
 </details>
 
 ### 2. Hỏi Jev trước khi phán đoán
 
-Một hook `SessionStart` chèn một quy tắc ngắn nhắc Claude hỏi Jev trước bất
-kỳ phán đoán nào — phân loại, chọn giữa các lựa chọn cố định, yes/no dựa
-trên bằng chứng, xếp hạng — không chỉ khi `AskUserQuestion` được gọi. Hai
+CLI của Jev dành cho các phán đoán **nội bộ của chính Claude** — dùng model
+hay tier nào, phân loại một thứ nội bộ ra sao — nơi đáp án suy ra được từ bằng
+chứng Claude đã có. Nó **không** phải đường vòng qua bạn: bất cứ gì bạn sẽ
+quyết (sở thích, push / PR / merge / deploy, mọi tác động ra bên ngoài như
+gửi, upload, mời, mua hay xoá) đều đi qua `AskUserQuestion`, nơi Jev chỉ đề
+xuất và bạn trả lời.
+
+Một hook `SessionStart` chèn một quy tắc ngắn nói đúng điều đó. Hai
 hook chạy ở mỗi lần bắt đầu session: `self-register.mjs`, dùng để lách một
 lỗi của Claude Code khiến hook `PreToolUse` của plugin không chạy được (xem
 [Ghi chú triển khai](#ghi-chú-triển-khai)), và `session-start.mjs`, chèn
@@ -192,9 +228,12 @@ Vì một lời nhắc lúc đầu session dễ bị quên sau chục lượt tr
 hook `UserPromptSubmit`. Đặt `ASK_JEV_REMIND=0` để tắt (ví dụ nếu bạn thấy
 lặp lại quá); nó vốn đã im lặng khi chưa cấu hình API key.
 
-Ngoài việc tự trả lời `AskUserQuestion`, Claude còn có thể hỏi Jev cho *bất
-kỳ* phán đoán nào — phân loại, chọn giữa các lựa chọn, trả lời yes/no, chấm
-điểm theo thang — qua skill và CLI đi kèm:
+Claude có thể hỏi Jev cho những phán đoán nội bộ đó — phân loại, chọn giữa
+các lựa chọn, trả lời yes/no, chấm điểm theo thang — qua skill và CLI đi kèm.
+Khi độ tin bằng hoặc cao hơn `ASK_JEV_ASK_THRESHOLD`, Claude có thể hành động
+theo đáp án và báo cáo bằng một dòng, `Jev chose "X" (0.93)` (bản thân CLI in
+JSON thô bên dưới; dòng báo cáo là một chỉ dẫn dành cho Claude). Dưới ngưỡng,
+Claude nêu lựa chọn thủ công của chính nó và nói rõ điều đó:
 
 ```
 echo '{"state": ..., "questions": ...}' | node ~/.claude/plugins/marketplaces/ask-jev/bin/jev.mjs
@@ -234,12 +273,37 @@ Skill (`skills/ask-jev/SKILL.md`) giải thích một request tốt trông ra sa
 bằng chứng dán nguyên văn vào `state`, một phán đoán cho mỗi câu hỏi, tiêu
 chí quan sát được và loại trừ lẫn nhau — kèm ví dụ minh hoạ.
 
+**CLI kiểm tra request trước khi gọi Jev** (`lib/cli-validate.mjs`, chỉ dùng
+regex, không gọi model). Không có cách ghi đè.
+
+*Bị từ chối* — exit code 2, không bao giờ gọi provider, Claude quay về lựa
+chọn thủ công của chính nó:
+
+- một key trong `state` là lời mô tả của chính Claude về bạn (`user_profile`,
+  `user_taste`, `about_user`, …) thay vì lời của bạn;
+- một câu hỏi về sở thích mà trong `state` không có lời của chính bạn hay lựa
+  chọn trong quá khứ;
+- Claude nhờ Jev đánh giá output của chính nó ("fix của tôi đúng chưa?");
+- một câu hỏi nhờ Jev quyết một việc thuộc về bạn — push / PR / merge / deploy
+  / gửi / xoá và tương tự — theo khung "tôi có nên…?" / "ok để…?", hoặc một
+  option có nhãn gồm hành động và đối tượng của nó (`Push to origin`,
+  `delete it`, `do_not_push`);
+- bất kỳ chuỗi câu hỏi, instruction hay criteria nào dài quá 4096 ký tự.
+
+*Bị gắn cờ* — một cảnh báo ở stderr và trong log, lời gọi vẫn đi tiếp: một
+câu hỏi trông có thể kiểm tra được bằng lệnh chỉ-đọc (hãy chạy nó và đưa output
+vào `state`); một đoạn văn trong `state` đọc như mô tả sở thích của bạn; một
+nhãn chỉ gồm một từ hành động hoặc một criterion giống hành động mà không có
+khung quyết định, có thể chỉ là phân loại thông thường (`release`,
+`Merge the PR now`); bằng chứng lặp nguyên văn câu hỏi hoặc nhiều nhãn option.
+
 ### 3. Các gate tự động
 
-Ngoài việc tự trả lời `AskUserQuestion`, bốn hook chủ động hỏi Jev đúng
+Bên cạnh đề xuất cho `AskUserQuestion`, bốn hook chủ động hỏi Jev đúng
 những lúc một reviewer con người sẽ thật sự lên tiếng — không cần Claude
 gọi phán đoán tường minh. Mỗi gate bật mặc định và có thể tắt riêng bằng
-`ASK_JEV_GATES` (danh sách phân tách bởi dấu phẩy; `ASK_JEV_GATES=` tắt cả bốn).
+`ASK_JEV_GATES` (danh sách phân tách bởi dấu phẩy; `ASK_JEV_GATES=` — đặt nhưng
+để trống — tắt cả bốn). Các gate không đổi khi chuyển sang thiết kế chỉ-đề-xuất.
 
 | Gate | Chạy khi | Jev phán đoán | Hiệu ứng |
 |---|---|---|---|
@@ -287,7 +351,7 @@ Có thể hoàn tác, nên **không** phải phá huỷ:
 <details>
 <summary>Jev được cho xem gì (thứ tự ưu tiên của <code>state</code>)</summary>
 
-Mọi gate — và hook `AskUserQuestion` ở mục 1 — đều dựng cùng một `state` có
+Mọi gate — và đề xuất cho `AskUserQuestion` ở mục 1 — đều dựng cùng một `state` có
 cấu trúc (`lib/context.mjs`), nhắm tới những gì một reviewer con người cẩn
 thận thật sự sẽ xem, điền theo thứ tự ưu tiên sau (bốn mục thấp nhất bị bỏ
 trước nếu hết ngân sách):
@@ -297,13 +361,16 @@ trước nếu hết ngân sách):
    Claude tự viết về người dùng. Xem "Bằng chứng, không phải mô tả cảm
    tính" bên dưới.
 2. `user_past_choices` — 30 lần gần nhất người dùng thật sự được hỏi và đã
-   chọn gì (ưu tiên cùng project trước), trên mọi session. Đã đo được là có
+   chọn gì, đọc từ log cục bộ (`readUserPastChoices`): **trên mọi project và
+   mọi session**, cùng project (`cwd`) trước. Khi Jev đã đề xuất, mục đó còn
+   mang `jev_recommended` và việc bạn có `agreement` hay không. Đã đo được là có
    ý nghĩa: cùng một câu hỏi về delegation cho điểm `merge_now=0.98` với một
    đoạn "user preferences" do LLM viết, nhưng `clean_then_merge=1.00` —
    option người dùng thật sự chọn — khi cho xem 7 lựa chọn thật của họ thay
    vào đó.
 3. `task` — `current_task` (tin nhắn mới nhất của người dùng) cộng 5 tin
-   nhắn gần nhất để lấy bối cảnh.
+   nhắn gần nhất để lấy bối cảnh — **chỉ văn bản do người gõ**; kết quả tool
+   và output của Claude không nằm ở đây.
 4. `action` — chính xác điều đang được phán đoán: câu lệnh, hoặc với
    Edit/Write/MultiEdit là nội dung `before`/`after` thật, không chỉ đường
    dẫn.
@@ -338,7 +405,7 @@ thật ~33k ký tự đo được round-trip ~1.8s; api.typesafe.ai giới hạn
 dài `JSON.stringify(state).length` thật sự khi các phần được thêm vào theo
 thứ tự ưu tiên, không phải tổng kích thước nội bộ của từng phần — một phần
 không vừa sẽ bị cắt (giữ phần đầu, đánh dấu `…[truncated]`) hoặc bỏ hẳn nếu
-không còn chỗ. Mỗi lời gọi gate được cấp ngân sách 4s (việc trả lời
+không còn chỗ. Mỗi lời gọi gate được cấp ngân sách 4s (đề xuất
 `AskUserQuestion` của `ask-jev.mjs` được cấp 8s) — chia nội bộ thành hai lần
 thử ~1850ms để một lần retry không bao giờ vượt ngân sách — và timeout
 trong `hooks.json` cho mỗi hook được đặt là `budget/1000 + 1s` biên độ nhân
@@ -357,10 +424,11 @@ hoặc timeout đều khiến gate im lặng — không bao giờ là một đi�
 
 ### 4. Autonomy
 
-`ASK_JEV_AUTONOMY` kiểm soát mức độ ask-jev tự hành động thay vì hỏi bạn —
-**`full` là mặc định**; đặt thành `safe` để quay về hành vi trước khi có
-autonomy (Jev chỉ bao giờ tự *trả lời* thay bạn, không bao giờ tự tiến hành
-qua một câu hỏi hay một lần dừng).
+`ASK_JEV_AUTONOMY` kiểm soát mức độ các [gate tự động](#3-các-gate-tự-động)
+tự hành động thay vì hỏi bạn — **`full` là mặc định**; đặt thành `safe` để
+quay về hành vi trước khi có autonomy (các gate không bao giờ tự tiến hành qua
+một câu hỏi hay một lần dừng). **Nó không ảnh hưởng tới `AskUserQuestion`:**
+mục đó chỉ-đề-xuất ở cả hai chế độ — Jev đề xuất, bạn trả lời.
 
 Một lằn ranh không bao giờ tắt, dù ở chế độ nào: một boolean `destructive` —
 xem ["thế nào là phá huỷ"](#3-các-gate-tự-động) — và `p ≥ 0.6` luôn đưa
@@ -368,12 +436,6 @@ quyết định về cho bạn.
 
 Những gì thay đổi ở `full`:
 
-- **`AskUserQuestion`** — một câu hỏi mang tính sở thích/cá nhân không còn tự
-  động fallback nữa. Jev còn kiểm tra xem pick có `grounded` không — lời của
-  chính bạn hoặc lựa chọn thật trong quá khứ có ủng hộ một option cụ thể — và
-  chỉ trả lời khi cả `grounded` lẫn độ tin của pick đều vượt ngưỡng; ngược
-  lại nó bỏ qua với outcome `ungrounded_personal`. `destructive` vẫn luôn
-  buộc bỏ qua bất kể có căn cứ hay không.
 - **gate `prompt`** — một prompt mơ hồ không bao giờ biến thành "hỏi người
   dùng" nữa. Thay vào đó Jev phán đoán xem cách hiểu nghĩa đen có khả thi
   không: nếu có, Claude tiến hành và nêu rõ giả định trong một dòng; nếu
@@ -392,7 +454,7 @@ Những gì thay đổi ở `full`:
   tiếp tục — `safe` không cần đạt ngưỡng đó nữa; `0.3–0.6` vẫn hỏi; `≥ 0.6`
   luôn hỏi.
 
-Mọi quyết định tự động vẫn được ghi log với cùng cấu trúc `label` +
+Mọi quyết định của gate vẫn được ghi log với cùng cấu trúc `label` +
 `confidence` + `reason` như mọi thứ khác — không có gì ở đây là âm thầm cả,
 chỉ là không còn đi qua bạn nữa.
 
@@ -406,13 +468,16 @@ Tất cả đều tuỳ chọn — mặc định đã hợp lý sẵn.
 | `ASK_JEV_API_KEY` | — | ghi đè mọi biến key khác, được kiểm tra trước |
 | `AI_GATEWAY_API_KEY` | — | deprecated: Vercel AI Gateway key cũ, chỉ là fallback |
 | `ASK_JEV_PROVIDER` | suy từ key | `typesafe` hoặc `vercel`; key `vck_` suy ra `vercel`, còn lại `typesafe` |
-| `ASK_JEV_ASK_THRESHOLD` | `0.8` | hạ xuống để Jev tự trả lời nhiều hơn (và sai nhiều hơn) |
+| `ASK_JEV_ASK_THRESHOLD` | `0.8` | ranh giới "mạnh" cho đề xuất `AskUserQuestion` (`Jev đề xuất` từ ngưỡng này trở lên, `Jev nghiêng về` bên dưới) và độ tin mà Claude có thể hành động theo đáp án CLI |
+| `ASK_JEV_ADVICE_CHANNEL` | `message` | cách hiển thị đề xuất `AskUserQuestion`: `message` (`systemMessage` cấp cao nhất) hoặc `annotate` (nối thêm vào câu hỏi qua `updatedInput`); giá trị khác đều là `message` |
 | `ASK_JEV_REMIND` | (bật) | đặt `0` để tắt lời nhắc "ask Jev" mỗi lượt |
-| `ASK_JEV_GATES` | `permission,stop,bash,prompt` | danh sách các [gate tự động](#3-các-gate-tự-động) đang bật, phân tách bởi dấu phẩy; để trống tắt cả bốn |
+| `ASK_JEV_GATES` | `permission,stop,bash,prompt` | danh sách các [gate tự động](#3-các-gate-tự-động) đang bật, phân tách bởi dấu phẩy; đặt nhưng để trống (`ASK_JEV_GATES=`) tắt cả bốn |
 | `ASK_JEV_STATE_CHARS` | `70000` | số ký tự ngữ cảnh tối đa gửi cho Jev mỗi lần gọi gate — giảm xuống để gate nhanh/rẻ hơn |
-| `ASK_JEV_AUTONOMY` | `full` | [chế độ autonomy](#4-autonomy); đặt `safe` để chỉ tự trả lời, không bao giờ tự tiến hành |
+| `ASK_JEV_AUTONOMY` | `full` | [chế độ autonomy](#4-autonomy); đặt `safe` để các gate không bao giờ tự tiến hành; không ảnh hưởng đề xuất `AskUserQuestion` |
 | `ASK_JEV_ALLOW_THRESHOLD` | `0.8` full / `0.9` safe | ngưỡng tự cho phép của gate `permission` |
 | `ASK_JEV_MODEL` | `jev-latest` (`typesafe-ai/jev` khi dùng `vercel`) | model nào chạy đánh giá cho Jev |
+| `ASK_JEV_LOG_FILE` | `~/.claude/ask-jev.log` | nơi ghi [log usage](#usage-analytics) |
+| `ASK_JEV_LOG` | (bật) | đặt `0` để không ghi log |
 | `ASK_JEV_API_URL` | `https://api.typesafe.ai/v1/systemone` (endpoint của Vercel khi dùng `vercel`) | chỉ cần khi dùng endpoint riêng; `ASK_JEV_GATEWAY_URL` vẫn được đọc như alias |
 
 Các tên `JEV_*` vẫn hoạt động nhưng đã deprecated.
@@ -423,62 +488,132 @@ cũ.
 
 ## Usage analytics
 
-Mỗi lời gọi API và mỗi quyết định — một gate, một câu trả lời trong Paseo,
-hay một lời gọi CLI trực tiếp tới `bin/jev.mjs` — được ghi thêm một dòng JSON
-vào `~/.claude/ask-jev.log` (đổi đường dẫn bằng `ASK_JEV_LOG_FILE`, tắt hẳn
-bằng `ASK_JEV_LOG=0`). Mỗi dòng đều có một `event_id` duy nhất. Mỗi dòng
-quyết định của gate mang theo `gate` nào tạo ra nó (`ask`, `permission`,
-`stop`, `bash`, `prompt`, `cli`), đáp án của Jev dưới dạng `label` + `confidence`,
-và một `reason` ngắn — phần tiêu chí Jev khớp, không bao giờ là transcript
-hội thoại hay payload `state` đã gửi cho Jev; một lời gọi `bin/jev.mjs` trực
-tiếp ghi log dưới `gate:"cli"` cùng cấu trúc đó cho mỗi câu hỏi
-(`question`, `options`, `outcome`, `result`, `confidence`) — hiện trong
-`decisions.by_gate.cli`, nhưng bị loại khỏi tổng chung, `by_outcome`, và
-hai phần trăm bên dưới, vì một lời gọi CLI đơn lẻ không phải là một câu
-hỏi được trả lời thay vì tới tay bạn. Một lần đứng im của
-[Paseo](#trong-paseo) được ghi dưới dạng `kind:"diagnostic"`, không phải
-`"decision"`, nên không tính vào các con số tổng bên dưới. Chỉ một câu trả lời thật của con người mới được
-ghi dưới dạng `kind:"user_choice"` — từ một `AskUserQuestion` bình thường
-của Claude Code (một hook `PostToolUse`) hoặc từ việc bạn tự trả lời trong
-Paseo khi Jev bỏ qua; đáp án của chính Jev luôn được ghi là `"decision"`,
-không bao giờ là `"user_choice"`.
+Mỗi lời gọi API và mỗi quyết định — một gate, một đề xuất cho
+`AskUserQuestion`, câu trả lời của chính bạn, hay một lời gọi CLI trực tiếp
+tới `bin/jev.mjs` — được ghi thêm một dòng JSON vào `~/.claude/ask-jev.log`
+(đổi đường dẫn bằng `ASK_JEV_LOG_FILE`, tắt hẳn bằng `ASK_JEV_LOG=0`). Mỗi
+dòng đều có một `event_id` duy nhất.
 
-Xem bằng:
+**Log là riêng tư, nhưng không hề không có lời của bạn.** Nó không chứa
+`state` gửi cho Jev hay transcript của session, nhưng có chứa những đoạn trích
+ngắn về điều bạn và Claude đã nói — liệt kê bên dưới. Hãy coi nó như lịch sử
+shell.
+
+<details>
+<summary>Log lưu những gì, từng trường một</summary>
+
+**File.** Được tạo với mode `0600`; một log có sẵn mà mở hơn mức đó sẽ được
+siết lại về `0600` lần đầu một process ghi vào. Các file marker cho ghi chú
+billing (`.ask-jev-billing-<hash của session id>`, rỗng, `0600`) nằm cạnh log,
+hoặc trong `ASK_JEV_STATE_DIR` nếu được đặt.
+
+**Mọi dòng (schema 2)** được đóng dấu `schema`, `version`, `invocation_id`,
+`session_id`, `autonomy`, `threshold`, `source` (`hook` / `paseo` / `cli`),
+`repo` (URL git remote đã bỏ credential, query và fragment) và `agent` (id
+agent Paseo, nếu có).
+
+**Các loại dòng**
+
+| `kind` | Ghi lại gì |
+|---|---|
+| `call` | một request tới Jev: status, latency, số lần thử, provider/model, kích thước (số ký tự) của từng phần `state` (`state_sizes` — chỉ có kích thước) |
+| `decision` | một quyết định của gate, hoặc với `gate:"ask"` (`mode:"advisory"`) outcome `advised` hay `advice_unavailable` cho mỗi câu hỏi |
+| `provider_error` | một lời gọi Jev thất bại: lớp lỗi, HTTP status, văn bản lỗi đã redact, ghi chú billing đã hiện chưa |
+| `outcome` | bạn đã trả lời `AskUserQuestion` bằng gì, cạnh điều Jev đề xuất (`agreement`: `agree` / `disagree` / `partial` / `free_text` / `no_advice` / `unparsed`) |
+| `standdown` | hook Claude Code đứng sang bên vì Paseo đang đề xuất (`diagnostic` cho các sự kiện Paseo liên quan) |
+| `user_choice` | các dòng cũ từ trước schema 2; vẫn được đọc để lấy lựa chọn trong quá khứ |
+
+**Văn bản được lưu** (một giới hạn tập trung, áp dụng cho mọi dòng trước khi ghi):
+
+| Trường | Chứa | Giới hạn |
+|---|---|---|
+| `question` / `question_text` | xem bảng kế tiếp | 300 ký tự |
+| `options`, `chosen`, `recommended` | nhãn option, lựa chọn của bạn, pick của Jev — mỗi phần tử của danh sách bị cắt riêng, tối đa 50 phần tử | 300 mỗi phần tử |
+| `advice_text` | dòng đề xuất bạn đã thấy | 300 |
+| `reason` | tiêu chí khớp, hoặc với đề xuất là mô tả option + tag grounded | 160 |
+| `question_name` | tên câu hỏi của CLI | 120 |
+| `warnings` | cờ kiểm tra của CLI (`class`, `path`, `message`), tối đa 20 | 300 mỗi chuỗi |
+| `error` / `message` | văn bản lỗi của provider, đã redact key, token và credential trong URL | 200 |
+| `cwd` | trên dòng `outcome`, thư mục làm việc | — |
+
+`question` là nơi lời của chính bạn có thể xuất hiện. Theo từng loại dòng:
+
+| Dòng | `question` chứa |
+|---|---|
+| đề xuất `AskUserQuestion` / `outcome` | nội dung câu hỏi Claude đã hỏi bạn; `chosen` là option bạn chọn **hoặc văn bản tự do bạn gõ** cho "Other" |
+| gate `permission` | câu lệnh Bash sắp chạy, hoặc `<tool> <đường dẫn file>` với các tool khác |
+| gate `bash` | câu lệnh Bash đã chạy (không phải output của nó) |
+| gate `prompt` | **prompt bạn đã gửi** (chỉ những prompt gate phán đoán: từ 12 ký tự, không bắt đầu bằng `/`) |
+| gate `stop` | tin nhắn cuối của Claude trong lượt đó |
+| CLI (`gate:"cli"`) | câu hỏi Claude viết cho Jev; `options` là tên các criteria |
+
+Vì các trường đó là văn bản tự do, một câu lệnh hay prompt chứa secret sẽ bị
+ghi đúng như đã gõ (tới mức giới hạn). Chỉ văn bản **lỗi** của provider được
+redact. Nếu điều đó quan trọng với bạn, đặt `ASK_JEV_LOG=0`.
+
+**Không lưu:** payload `state`, transcript, nội dung CLAUDE.md / memory,
+output của lệnh, và API key.
+
+**Log cũng được đọc ngược lại.** Các dòng `outcome` trong quá khứ của bạn nuôi
+`user_past_choices` và các quyết định gate gần đây nuôi `history` trong các
+request sau, nên văn bản `question` / `chosen` của một session (và một
+project) có thể được gửi cho Jev ở session khác. Xoá file để xoá "trí nhớ" đó.
+
+</details>
+
+Xem nó bằng:
 
 ```
 node ~/.claude/plugins/marketplaces/ask-jev/bin/jev.mjs stats
 ```
 
 <details>
-<summary>Output mẫu và phần chia nhỏ theo <code>by_gate</code></summary>
+<summary>Output mẫu và ý nghĩa từng dòng</summary>
 
 ```
-Calls: 19 (ok 18, error 1)
+Calls: 19 (ok 18, error 1)  error rate 5.3%
 Latency: avg 512ms, p95 910ms
-Jev decided: 63.2%  Fell back to user: 15.8%  User overrides: 7
+Human answers: 8   Agreement with Jev: 71.4% (5 of 7 compared; disagree 1, partial 1)
+Advice on AskUserQuestion: 9 questions, advised 7 (strong 5, weak 2), unavailable 2
+Positive outcomes: 78.9%  Fallbacks: 15.8%
+  (CLI rows: positive = a strong result, confidence at or above the threshold; the log only observes the result, not whether the agent acted on it)
+
+By entry point:
+  entry point    decisions  calls  errors  error rate
+  hook                  16     16       1        6.3%
+  paseo                  2      2       0        0.0%
+  cli                    1      1       0        0.0%
+
+Stand-downs (not decisions, not errors): 3  paseo 3
+Provider errors: 1  server 1
 
 Decisions by outcome:
-  answered               7  36.8%
-  allow                  4  21.1%
-  success                3  15.8%
-  low_confidence         2  10.5%
-  personal               1   5.3%
-  ask                    1   5.3%
-  tests_failed           1   5.3%
+  advised                7   36.8%
+  allow                  4   21.1%
+  success                3   15.8%
+  advice_unavailable     2   10.5%
+  ask                    1    5.3%
+  tests_failed           1    5.3%
+  true                   1    5.3%
 
 By gate:
-  ask          calls   10  positive  70.0%  answered 7, low_confidence 2, personal 1
+  ask          calls    9  positive  77.8%  advised 7, advice_unavailable 2
   permission   calls    5  positive  80.0%  allow 4, ask 1
   bash         calls    4  positive  75.0%  success 3, tests_failed 1
+  cli          calls    1  positive 100.0%  true 1
 
 Recent decisions:
-  2026-09-22T10:03:11.000Z  answered           Is this a bug or a feature?    bug (0.91)
+  2026-09-22T10:03:11.000Z  advised            Is this a bug or a feature?    bug (0.91)
   2026-09-22T10:02:47.000Z  allow              rm dist/old-build.js           safe (0.97)
 ```
 
-Thu hẹp khoảng thời gian bằng `--last N` hoặc `--since 7d|24h`, hoặc thêm `--json` để lấy dữ liệu tổng hợp thô thay vì báo cáo dạng text.
+Các con số chỉ mang tính minh hoạ. Thu hẹp khoảng thời gian bằng `--last N` hoặc `--since 7d|24h`, hoặc thêm `--json` để lấy số liệu tổng hợp thô thay vì báo cáo dạng văn bản.
 
-`decisions.by_gate` chia nhỏ cùng con số đó theo từng gate — `{ total, positive, by_outcome }` — vì mỗi gate định nghĩa "positive" khác nhau (một quyết định `ask` được Jev trả lời thẳng, một quyết định `permission` được Jev tự cho phép, một lần chạy `bash` được Jev đánh giá `success`, …). "Fell back to user" chỉ đếm hai trường hợp một câu hỏi hoặc permission prompt thật sự tới tay bạn: một câu hỏi `ask` chưa được trả lời, hoặc một gate `permission` buộc phải hỏi. "User overrides" đếm các sự kiện `user_choice` — mọi câu trả lời thật bạn đưa cho `AskUserQuestion`, được một hook `PostToolUse` ghi lại và đưa ngược vào `user_past_choices` cho các quyết định sau này.
+- **Human answers** — mọi câu trả lời bạn đưa cho một `AskUserQuestion` (một dòng `outcome`, hoặc `user_choice` cũ), dù Jev có đề xuất hay không.
+- **Agreement with Jev** — trong các câu trả lời mà đề xuất của Jev đã được hiện, tỷ lệ khớp chính xác với nó (`agree`); `partial` là một câu trả lời `multiSelect` có phần trùng. Câu trả lời tự do và câu không có đề xuất không được đem ra so sánh.
+- **By entry point** — số quyết định, số lời gọi Jev, số lỗi và tỷ lệ lỗi theo từng cổng vào (`hook`, `paseo`, `cli`). Quyết định của CLI được tính vào tổng.
+- **Stand-downs** được liệt kê riêng: chúng không phải quyết định, cũng không phải lỗi.
+- **Positive** có nghĩa khác nhau ở mỗi gate (một câu hỏi `ask` Jev đã đề xuất, một quyết định `permission` Jev tự cho phép, một lần chạy `bash` Jev đánh giá `success`, …). **Với CLI, nó nghĩa là một kết quả mạnh — độ tin bằng hoặc cao hơn ngưỡng — chứ không phải bằng chứng rằng agent đã hành động theo.** "Fallbacks" đếm các câu hỏi không có đề xuất, các gate `permission` buộc phải hỏi, và kết quả CLI dưới ngưỡng.
 
 </details>
 
@@ -494,8 +629,9 @@ Muốn có dashboard trực tiếp thay vì script, cài
 [Paseo plugin](paseo-plugin/README.md) — một workspace panel với stat
 tile, bộ lọc theo gate cùng bảng phân tích outcome, và một bảng quyết định
 cập nhật trực tiếp (Time, Gate, Outcome, Question/Subject, Answer, Reason).
-Click vào một dòng để xem đầy đủ. Cùng một plugin đó cũng tự trả lời
-`AskUserQuestion` (xem [ở trên](#1-tự-trả-lời-askuserquestion)) — cài một
+Click vào một dòng để xem đầy đủ; panel còn hiện "Human answers" và "Agreement
+with Jev". Cùng một plugin đó cũng đề xuất cho
+`AskUserQuestion` (xem [ở trên](#1-đề-xuất-cho-askuserquestion)) — cài một
 lần là đủ cho cả hai. Settings → Plugins → dán vào "Plugin
 source" → Install:
 
@@ -575,12 +711,12 @@ request.
 thẳng API của Jev. Clone về là chạy được — không cần
 `npm install`, không `node_modules`.
 
-**"Trả lời thay bạn" thật ra là một lần từ chối.** Claude Code không cho
-hook cách nào trả về một kết quả tool giả lập. Nhưng một hook `PreToolUse`
-trả về `permissionDecision: "deny"` sẽ có `permissionDecisionReason` được
-đưa thẳng lại cho model — nên "câu trả lời" của ask-jev thật ra là *chặn
-câu hỏi lại và nói cho Claude biết đáp án là gì*. Bạn sẽ thấy một dòng
-`Jev answered: ...` trong session, và Claude tiếp tục như thể bạn vừa gõ nó.
+**Hook `AskUserQuestion` chỉ thêm thông tin.** Nó không bao giờ trả về
+`permissionDecision: "deny"` hay `"allow"`, và không bao giờ đặt `answers` vào
+`updatedInput`. Kênh `message` mặc định chỉ phát một `systemMessage` cấp cao
+nhất; kênh `annotate` tuỳ chọn còn trả về `permissionDecision: "ask"` kèm các
+câu hỏi đã chú thích, vẫn hỏi bạn. Mọi lỗi nội bộ đều để câu hỏi đúng như
+Claude đã viết.
 
 **Vì sao có thêm một hook `SessionStart`.** Claude Code hiện không chạy hook
 `PreToolUse` của riêng plugin
