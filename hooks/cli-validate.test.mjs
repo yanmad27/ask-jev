@@ -134,11 +134,35 @@ test("actions/taste in the question or option labels still reject even when a Pe
   assert.ok(has(withBrief(choice("Which wording would the user like?", ["terse", "verbose"])), "taste_without_user_words", "reject"));
 });
 
-test("review repair (a): neutral question + yes/no labels whose criteria define 'push to origin' vs 'keep local' → reject", () => {
-  const q = { type: "choice", instructions: { question: "Which next step?" }, criteria: { yes: { what: "Push to origin", not_for: "no", examples: [] }, no: { what: "Keep local", not_for: "yes", examples: [] } } };
-  assert.ok(has({ state: { diff: "x" }, questions: { q } }, "user_decision_action", "reject"));
-  const b = { type: "boolean", instructions: "Which next step?", criteria: { true: "Merge the PR now", false: "Leave it open" } };
-  assert.ok(has({ state: { diff: "x" }, questions: { q: b } }, "user_decision_action", "reject"));
+test("round 2 (1): action only in criteria definitions/labels is a flag, not a reject; framing or verb+object label rejects", () => {
+  const deployBuild = { type: "choice", instructions: { question: "Classify the requested operation." }, criteria: { deploy: { what: "Deploy to production", not_for: "build", examples: [] }, build: { what: "Build locally", not_for: "deploy", examples: [] } } };
+  assert.deepEqual(classes({ state: { request: "ship it" }, questions: { q: deployBuild } }), ["ambiguous_action:flag"]);
+  const neutral = { type: "choice", instructions: { question: "Which next step?" }, criteria: { yes: { what: "Proceed with the deployment", not_for: "no", examples: [] }, no: { what: "Keep it local", not_for: "yes", examples: [] } } };
+  assert.ok(!classes({ state: { diff: "x" }, questions: { q: neutral } }).some((c) => c.endsWith(":reject")));
+  const pushOrigin = { type: "choice", instructions: { question: "Which next step?" }, criteria: { yes: { what: "Push to origin", not_for: "no", examples: [] }, no: { what: "Keep local", not_for: "yes", examples: [] } } };
+  assert.deepEqual(classes({ state: { diff: "x" }, questions: { q: pushOrigin } }), ["ambiguous_action:flag"]);
+  const bool2 = { type: "boolean", instructions: "Which next step?", criteria: { true: "Merge the PR now", false: "Leave it open" } };
+  assert.deepEqual(classes({ state: { diff: "x" }, questions: { q: bool2 } }), ["ambiguous_action:flag"]);
+  assert.ok(has({ state: { diff: "x" }, questions: { q: { ...pushOrigin, instructions: { question: "Should I do the next step?" } } } }, "user_decision_action", "reject"));
+  assert.ok(has({ state: { diff: "x" }, questions: { q: { ...pushOrigin, instructions: { question: "Which next step?", focus: "ok to go ahead?" } } } }, "user_decision_action", "reject"));
+  assert.ok(has({ state: { diff: "x" }, questions: { q: { ...deployBuild, criteria: { merge_now: { what: "m", not_for: "build", examples: [] }, build: { what: "b", not_for: "merge_now", examples: [] } } } } }, "user_decision_action", "reject"));
+});
+
+test("round 2 (2): 'should my/our X be accepted/approved/merged…' and 'is my X ready/good enough' reject self_judgement", () => {
+  for (const q of ["Should my fix be accepted?", "Should our change be approved?", "Can my PR be merged?", "Should my patch be shipped?", "Is my fix ready?", "Is my implementation good enough?", "Would my change be good enough to land?"]) {
+    assert.ok(has(req('{"diff":"a to b"}', { q: bool(q) }), "self_judgement", "reject"), q);
+  }
+  assert.ok(lacks(req('{"report":"x"}', { q: bool("Should the Peer's fix be accepted given `report`?") }), "self_judgement"));
+});
+
+test("round 2 (3): oversized question/focus/definition rejects as oversized_text; padding cannot hide a decision question", () => {
+  const padded = "word ".repeat(1000) + "Should I merge now?";
+  assert.ok(padded.length > 4096);
+  assert.ok(has(req('{"diff":"x"}', { q: bool(padded) }), "oversized_text", "reject"));
+  assert.ok(has(req('{"diff":"x"}', { q: { type: "boolean", instructions: { question: "Is `diff` ok?", focus: padded }, criteria: { true: "yes", false: "no" } } }), "oversized_text", "reject"));
+  assert.ok(has(req('{"diff":"x"}', { q: { type: "boolean", instructions: "Is `diff` ok?", criteria: { true: padded, false: "no" } } }), "oversized_text", "reject"));
+  assert.ok(lacks(req('{"diff":"x"}', { q: bool("a ".repeat(2000)) }), "oversized_text"));
+  assert.ok(lacks(req(JSON.stringify({ diff: padded }), { q: bool("Is `diff` ok?") }), "oversized_text"));
 });
 
 test("review repair (b): nested description-style key rejects at any depth", () => {

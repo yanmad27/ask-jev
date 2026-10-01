@@ -54,10 +54,11 @@ evidence — your own description of the user, a taste question without the
 user's own words, an action the user decides, a judgement of your own output —
 and warns on checkable facts asked without command output, on evidence that
 repeats the question, on state prose describing the user's taste, and on option
-labels that name an action (release/deploy/merge…) when you may only be
-classifying — a label alone is a warning, but a permission-style question
-("should I…?"), an action-shaped criterion ("push to origin") or an option like
-`merge_now` is rejected. A rejection is final — there is no override. If you think
+labels or criteria that name an action (release/deploy/merge, "push to origin")
+when you may only be classifying — those alone are a warning, but a
+permission-style question ("should I…?", "ok to…", "whether to…") over them, or
+an option like `merge_now`, is rejected. A question, focus or definition over
+4096 characters is rejected too (`oversized_text`); put bulk evidence in `state`. A rejection is final — there is no override. If you think
 it is a false positive, do not retry with disguised wording: make and state your
 own manual choice instead. Never put your own description of the user in `state`;
 only raw evidence: their messages, their files, their past decisions.
