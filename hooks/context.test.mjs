@@ -123,8 +123,10 @@ test("ask-jev-answer.mjs: parses real AskUserQuestion tool_response strings, ign
     await runAnswerHook(s, logFile);
   }
 
-  const events = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "user_choice");
-  assert.equal(events.length, 2, "only the two real answer strings produce user_choice events");
+  const all = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "outcome");
+  const events = all.filter((e) => e.kind_of_answer !== "unparsed");
+  assert.equal(events.length, 2, "only the two real answer strings produce parsed outcome events");
+  assert.equal(all.length - events.length, 3, "everything else is logged as unparsed, never dropped");
 
   assert.equal(events[0].question, 'Enforce "definition bắt buộc" ở đâu?');
   assert.deepEqual(events[0].chosen, ["Hook enforce + README (Recommended)"]);

@@ -1,26 +1,44 @@
 #!/usr/bin/env node
 /**
- * Hỏi Jev trước khi hỏi người.
+ * Jev tư vấn trước khi người trả lời AskUserQuestion.
  *
- * Chặn AskUserQuestion, đưa câu hỏi + ngữ cảnh phiên cho Jev (typesafe.ai, model
- * đánh giá trả xác suất). Đủ chắc và không phải chuyện riêng của người dùng thì
- * trả lời thay, còn lại để câu hỏi đi tiếp bình thường.
+ * Hook này KHÔNG BAO GIỜ trả lời hay chặn câu hỏi: không permissionDecision "deny"/"allow",
+ * không `answers`/`response` trong updatedInput. Nó hỏi Jev với ngữ cảnh phiên rồi hiện đề xuất
+ * (option, độ chắc, một dòng lý do) cho người; lỗi provider thì hiện ghi chú "không có đề xuất".
  *
- * Claude Code không cho hook trả về tool result giả, nhưng permissionDecision
- * "deny" thì permissionDecisionReason được đưa ngược vào model — nên "trả lời"
- * ở đây = chặn câu hỏi + nói cho model biết đáp án.
+ * Kênh hiển thị (ASK_JEV_ADVICE_CHANNEL):
+ *   message  (mặc định) — chỉ `{"systemMessage": ...}` ở top-level; câu hỏi đi nguyên vẹn.
+ *   annotate            — hookSpecificOutput {permissionDecision:"ask", updatedInput:{...tool_input, questions đã chú thích}}
+ *                         + cùng systemMessage; câu hỏi chú thích thêm đề xuất, option được đề xuất đánh dấu "(Jev đề xuất)".
+ *
+ * Im lặng (không note) khi: không có API key, chưa có ngữ cảnh, câu hỏi một option, option thiếu mô tả —
+ * hai trường hợp cuối vẫn ghi dòng advice_unavailable{single_option|missing_definition}.
  *
  * Không phụ thuộc npm: chỉ fetch + fs của Node.
  */
 import { readFileSync, openSync, closeSync, statSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
-import { apiKey, askJev, logEvent } from "../lib/jev.mjs";
+import { createHash, randomUUID } from "node:crypto";
+import { pathToFileURL } from "node:url";
+import { apiKey, askJev, logEvent, runInvocation, DEFAULT_BUDGET_MS } from "../lib/jev.mjs";
 import { buildState, hasContext } from "../lib/context.mjs";
-import { truncate, autonomy } from "../lib/gate.mjs";
 import { env } from "../lib/env.mjs";
-import { buildPickQuestions, buildMultiQuestions, interpretPick, interpretMulti, pickCriteria } from "../lib/answer-policy.mjs";
+import { pickCriteria, buildAdviceQuestions, buildAdviceMultiQuestions, adviceBlocker, adviseQuestions } from "../lib/answer-policy.mjs";
+
+/** Ngân sách gọi provider; hooks.json (10s) và self-register (15s) phải lớn hơn con số này + HOOK_MARGIN_MS. */
+export const ADVICE_BUDGET_MS = DEFAULT_BUDGET_MS;
+
+const THRESHOLD = (() => {
+  const t = Number(env("ASK_THRESHOLD", 0.8));
+  return Number.isFinite(t) ? t : 0.8;
+})();
+
+export const adviceChannel = () => (env("ADVICE_CHANNEL", "message")?.trim().toLowerCase() === "annotate" ? "annotate" : "message");
+
+// Văn bản do agent viết: bỏ C0/C1, zero-width, bidi override/isolate, và gộp khoảng trắng/xuống dòng.
+const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]+/g;
+const clean = (s) => String(s ?? "").replace(INVISIBLE, " ").replace(/\s+/g, " ").trim();
 
 /**
  * hooks.json và self-register.mjs (xem file đó) có thể cùng đăng ký hook này, nên
@@ -41,67 +59,119 @@ function isDuplicate(input) {
   }
 }
 
-const THRESHOLD = Number(env("ASK_THRESHOLD", 0.8));
+const labelsOf = (options) => options.map((o) => o?.label);
+const fmtConf = (c) => Number(c).toFixed(2);
 
-let currentSessionId;
-function logDecision(question, options, outcome, extra = {}) {
-  logEvent({ kind: "decision", source: "hook", gate: "ask", session_id: currentSessionId, question, options: options.map((o) => o.label), outcome, ...extra });
+/** "Jev đề xuất: X (0.86) — lý do" (chắc) hoặc "Jev nghiêng về: X (0.55) — lý do" (yếu). */
+export function adviceLine(advice) {
+  const picked = advice.recommended.length ? advice.recommended.map(clean).join(", ") : "không chọn option nào";
+  const head = advice.strength === "strong" ? "Jev đề xuất" : "Jev nghiêng về";
+  const reason = clean(advice.reason);
+  return `${head}: ${picked} (${fmtConf(advice.confidence)})${reason ? ` — ${reason}` : ""}`;
 }
 
-/** Log kết quả của answer-policy.mjs rồi trả về {label, confidence} nếu đã trả lời, ngược lại null. */
-function applyResult(question, options, result) {
-  logDecision(question, options, result.outcome, {
-    ...(result.label ? { label: result.label } : {}),
-    ...(result.confidence !== undefined ? { confidence: result.confidence } : {}),
-    ...(result.reason ? { reason: truncate(result.reason, 160) } : {}),
+/** Ghi chú khi không có đề xuất. `notice` = "billing" chỉ cho lần đầu trong phiên (claimBillingNote), sau đó generic. */
+export function unavailableNote(errorClass, status, notice) {
+  if (notice === "billing") return "Jev: không có đề xuất (hết credits — credits exhausted) — bạn tự quyết";
+  return `Jev: không có đề xuất (lỗi ${status ?? errorClass ?? "provider"}) — bạn tự quyết`;
+}
+
+const reasonOf = (errorClass) => (errorClass === "billing" || errorClass === "timeout" ? errorClass : "provider_error");
+
+function annotateQuestions(toolInput, questions, advices, lines) {
+  return {
+    ...toolInput,
+    questions: questions.map((q, i) => {
+      const a = advices[i];
+      if (a?.outcome !== "advised") return q;
+      const recommended = new Set(a.recommended);
+      return {
+        ...q,
+        question: `${q.question}\n\n${lines[i]}`,
+        options: (q.options ?? []).map((o) => (recommended.has(o.label) ? { ...o, description: `${o.description} (Jev đề xuất)` } : o)),
+      };
+    }),
+  };
+}
+
+async function advise(input, questions, key) {
+  const channel = adviceChannel();
+  const { state, sizes } = buildState({ transcriptPath: input.transcript_path ?? "", cwd: input.cwd, sessionId: input.session_id });
+  const row = (i, q, outcome, extra = {}) =>
+    logEvent({
+      kind: "decision", source: "hook", gate: "ask", mode: "advisory", outcome, question_index: i,
+      question: q.question, options: labelsOf(q.options ?? []), ...extra,
+    });
+
+  if (!hasContext(state)) {
+    questions.forEach((q, i) => row(i, q, "advice_unavailable", { reason: "no_context", note_shown: false }));
+    return;
+  }
+
+  const failures = new Map();
+  const items = await Promise.all(
+    questions.map(async (q, i) => {
+      const options = q.options ?? [];
+      const item = { options, multiSelect: Boolean(q.multiSelect) };
+      if (adviceBlocker(options)) return item;
+      const [payload, built] = q.multiSelect
+        ? [{ conversationContext: state, pendingQuestion: q.question }, buildAdviceMultiQuestions(q.question, options)]
+        : [{ conversationContext: state, pendingQuestion: q.question, answerOptions: pickCriteria(options) }, buildAdviceQuestions(options)];
+      try {
+        item.answers = await askJev(key, payload, built, "hook", ADVICE_BUDGET_MS, sizes, { gate: "ask", question_index: i });
+      } catch (err) {
+        item.errorClass = reasonOf(err?.errorClass);
+        failures.set(i, { errorClass: err?.errorClass, status: err?.status, notice: err?.notice });
+      }
+      return item;
+    }),
+  );
+
+  const advices = adviseQuestions(items, { threshold: THRESHOLD });
+  const lines = advices.map((a) => (a.outcome === "advised" ? adviceLine(a) : null));
+  const multi = questions.length > 1;
+  const withIndex = (i, text) => (multi ? `[${i + 1}/${questions.length}] ${text}` : text);
+
+  // Một lỗi provider thường trúng mọi câu: gộp thành một note; billing chỉ hiện đúng một lần (note "billing"
+  // thuộc câu nào giành được marker, các câu billing còn lại được note đó che).
+  const billingShown = [...failures.values()].some((f) => f.notice === "billing");
+  const notes = new Map();
+  const noteFor = (i) => {
+    const f = failures.get(i);
+    if (!f) return null;
+    if (f.errorClass === "billing" && billingShown) return f.notice === "billing" ? unavailableNote(f.errorClass, f.status, "billing") : "";
+    return unavailableNote(f.errorClass, f.status, f.notice);
+  };
+  const display = channel === "annotate" ? "updatedInput" : "systemMessage";
+
+  advices.forEach((a, i) => {
+    const q = questions[i];
+    if (a.outcome === "advised") {
+      row(i, q, "advised", {
+        recommended: a.recommended, confidence: a.confidence, strength: a.strength, grounded: a.grounded,
+        reason: a.reason, advice_text: lines[i], display,
+      });
+      return;
+    }
+    const note = noteFor(i);
+    const shown = Boolean(failures.has(i));
+    if (note) notes.set(note, withIndex(i, note));
+    row(i, q, "advice_unavailable", { reason: a.reason, note_shown: shown });
   });
-  return result.outcome === "answered" ? { label: result.label, confidence: result.confidence } : null;
-}
 
-async function decide(key, { question, options, context, sizes }) {
-  if (options.length < 2) {
-    logDecision(question, options, "error", { reason: "single option" });
-    return null;
+  const messageLines = advices.flatMap((a, i) => (a.outcome === "advised" ? [withIndex(i, lines[i])] : []));
+  const shownNotes = [...notes.values()];
+  const systemMessage = [...messageLines, ...shownNotes].join("\n");
+  const out = {};
+  if (systemMessage) out.systemMessage = systemMessage;
+  if (channel === "annotate" && advices.some((a) => a.outcome === "advised")) {
+    out.hookSpecificOutput = {
+      hookEventName: "PreToolUse",
+      permissionDecision: "ask",
+      updatedInput: annotateQuestions(input.tool_input, questions, advices, lines.map((l, i) => (l ? withIndex(i, l) : l))),
+    };
   }
-
-  const mode = autonomy();
-  // docs.typesafe.ai/concepts/state: state là nội dung để đánh giá, tách khỏi câu
-  // hỏi (judgment) nằm trong instructions; mỗi phần đặt tên rõ để giữ quan hệ.
-  const answers = await askJev(
-    key,
-    { conversationContext: context, pendingQuestion: question, answerOptions: pickCriteria(options) },
-    buildPickQuestions(options, { autonomy: mode }),
-    "hook",
-    8000,
-    sizes,
-  );
-
-  return applyResult(question, options, interpretPick(answers, options, { autonomy: mode, threshold: THRESHOLD }));
-}
-
-/**
- * multiSelect: không có một "phương án đúng" duy nhất, nên mỗi option là một câu
- * hỏi boolean riêng — có áp dụng hay không. Chỉ giải quyết khi MỌI option đều dứt
- * khoát (>= THRESHOLD hoặc <= 1-THRESHOLD); còn một option lửng lơ ở giữa thì cả
- * câu hỏi coi như chưa giải quyết được, để người quyết.
- */
-async function decideMulti(key, { question, options, context, sizes }) {
-  if (options.length < 2) {
-    logDecision(question, options, "error", { reason: "single option" });
-    return null;
-  }
-
-  const mode = autonomy();
-  const answers = await askJev(
-    key,
-    { conversationContext: context, pendingQuestion: question },
-    buildMultiQuestions(question, options, { autonomy: mode }),
-    "hook",
-    8000,
-    sizes,
-  );
-
-  return applyResult(question, options, interpretMulti(answers, options, { autonomy: mode, threshold: THRESHOLD }));
+  if (Object.keys(out).length > 0) process.stdout.write(JSON.stringify(out));
 }
 
 async function main() {
@@ -113,108 +183,28 @@ async function main() {
   }
   if (input.tool_name !== "AskUserQuestion") return;
 
-  // Trong Paseo, AskUserQuestion là "permission request" native (kind:"question") do
-  // người dùng trả lời trên UI. Hook Claude Code chỉ có permissionDecision "deny" để
-  // đưa văn bản ngược vào model — Paseo hiển thị "deny" đó thành khối lỗi đỏ
-  // "PreToolUse:AskUserQuestion hook error", trông như hỏng dù đáp án của Jev vẫn tới
-  // model. Nên trong Paseo hook đứng im: để câu hỏi hiện bình thường cho người dùng,
-  // không auto-answer, không lỗi đỏ. PASEO_AGENT_ID chỉ tồn tại trong agent của Paseo.
-  if (process.env.PASEO_AGENT_ID) {
-    logEvent({ kind: "diagnostic", source: "hook", gate: "ask", session_id: input.session_id, outcome: "paseo_standdown" });
-    return;
-  }
-
-  if (isDuplicate(input)) return;
-  currentSessionId = input.session_id;
-
-  const key = apiKey();
-  if (!key) {
-    logEvent({ kind: "decision", source: "hook", gate: "ask", session_id: input.session_id, outcome: "no_key" });
-    return;
-  }
-
-  const questions = input.tool_input?.questions;
-  if (!Array.isArray(questions) || questions.length === 0) return;
-
-  // Jev chấm theo criteria; nhãn trần không có description thì không phải criterion.
-  const missing = questions.flatMap((q) =>
-    (q.options ?? [])
-      .filter((o) => !o.description || !o.description.trim())
-      .map((o) => `"${q.question}" → option "${o.label}"`),
-  );
-  if (missing.length > 0) {
-    for (const q of questions) {
-      if ((q.options ?? []).some((o) => !o.description || !o.description.trim())) {
-        logDecision(q.question, q.options ?? [], "missing_definition");
-      }
+  const ctx = { invocation_id: input.tool_use_id || randomUUID(), session_id: input.session_id ?? null, source: "hook", threshold: THRESHOLD };
+  await runInvocation(ctx, async () => {
+    // Trong Paseo, AskUserQuestion là permission request native do người dùng trả lời trên UI;
+    // Paseo có đường tư vấn riêng, nên hook Claude Code đứng im ở đó. PASEO_AGENT_ID chỉ có trong agent của Paseo.
+    if (process.env.PASEO_AGENT_ID) {
+      logEvent({ kind: "standdown", source: "hook", gate: "ask", reason: "paseo" });
+      return;
     }
-    process.stdout.write(JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason:
-          "Every option needs a description that DEFINES it — that's the criterion Jev scores a probability against, a bare " +
-          "label is not one. A usable definition is observable (checkable directly against the conversation, not inferred) and " +
-          "mutually exclusive (it could not also describe a different option) — otherwise the probability is meaningless. " +
-          'Example: question "Is this a hamburger?" → option "Yes" needs a description like "A hot sandwich: cooked ground-meat ' +
-          'patty inside a sliced bun" — checkable, and clearly not what "No" would also satisfy — not just "Yes". ' +
-          `Re-ask the same question(s) with every option carrying a definition like that. Missing definitions:\n${missing.join("\n")}`,
-        systemMessage: "Jev: options need definitions — asking again",
-      },
-    }));
-    return;
-  }
 
-  const { state, sizes } = buildState({ transcriptPath: input.transcript_path ?? "", cwd: input.cwd, sessionId: input.session_id });
-  if (!hasContext(state)) {
-    logEvent({ kind: "decision", source: "hook", gate: "ask", session_id: input.session_id, outcome: "no_context" });
-    return;
-  }
+    if (isDuplicate(input)) return;
 
-  const results = await Promise.all(
-    questions.map((q) => {
-      const fn = q.multiSelect ? decideMulti : decide;
-      return fn(key, { question: q.question, options: q.options ?? [], context: state, sizes }).catch(() => {
-        logDecision(q.question, q.options ?? [], "error");
-        return null;
-      });
-    }),
-  );
+    const key = apiKey();
+    if (!key) {
+      logEvent({ kind: "decision", source: "hook", gate: "ask", mode: "advisory", outcome: "advice_unavailable", reason: "no_key", note_shown: false });
+      return;
+    }
 
-  // Trả lời từng câu một, không phải tất-cả-hoặc-không-gì: câu nào Jev chắc thì
-  // dùng luôn, câu nào không thì bảo Claude chỉ hỏi lại đúng câu đó — người dùng
-  // không mất những lựa chọn Jev đã chắc chỉ vì một câu khác còn mập mờ.
-  const resolved = questions
-    .map((q, i) => (results[i]?.label ? { question: q.question, ...results[i] } : null))
-    .filter(Boolean);
-  if (resolved.length === 0) return;
-
-  // Reason (model-facing) giữ mapping câu hỏi ↔ lựa chọn — nhiều câu trong một request thì
-  // Claude cần biết Jev chọn gì cho câu nào. systemMessage (người dùng thấy) thì ngắn, không
-  // cần lặp lại câu hỏi.
-  const shortLines = resolved.map((r) => `Jev chose "${r.label}" (${r.confidence.toFixed(2)})`);
-  const answered = resolved.map((r) => `"${r.question}" → Jev chose "${r.label}" (${r.confidence.toFixed(2)})`).join("\n");
-  const unresolved = questions.filter((_, i) => !results[i]?.label).map((q) => `"${q.question}"`);
-
-  // Đây không phải lỗi: Claude Code chỉ có permissionDecision "deny" để đưa văn bản
-  // ngược vào model, nên câu trả lời của Jev buộc phải đi qua đường "deny" và UI
-  // hiển thị nó dưới nhãn đỏ "hook error". Mở đầu reason bằng "Not a real error" để
-  // người liếc qua transcript hiểu ngay đây là câu Jev tự trả lời, không phải hỏng.
-  const reason = unresolved.length === 0
-    ? `Not a real error — Jev already answered this for you from the conversation, so you don't have to ask. Use these choices and continue; do not re-ask:\n${answered}`
-    : `Not a real error — Jev already answered some of these for you from the conversation. Use these, do not re-ask them:\n` +
-      `${answered}\n\nRe-ask the user ONLY the unresolved question(s):\n${unresolved.join("\n")}`;
-
-  process.stdout.write(JSON.stringify({
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: reason,
-      systemMessage: shortLines.join("; "),
-    },
-  }));
+    const questions = input.tool_input?.questions;
+    if (!Array.isArray(questions) || questions.length === 0) return;
+    await advise(input, questions, key);
+  });
 }
 
-// Mọi lỗi đều im lặng: hook này chỉ được phép bớt việc cho người, không bao giờ
-// được chặn họ trả lời.
-main().catch(() => {});
+// Mọi lỗi đều im lặng: hook này chỉ được phép thêm thông tin, không bao giờ được chặn người trả lời.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main().catch(() => {});

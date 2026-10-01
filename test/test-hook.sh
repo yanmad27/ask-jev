@@ -67,14 +67,11 @@ EOF
 echo
 echo "== deterministic (no API call) =="
 
-# missing option description always bounces back with a fixed deny message
+# missing option description: the hook never blocks or answers — silent, the question goes to the user as-is
 t2="$TMP/t2.jsonl"; : > "$t2"
 out="$(make_payload "$t2" '{"questions":[{"question":"Pick one","options":[{"label":"A","description":""},{"label":"B","description":"desc"}]}]}' | node "$HOOK")"
-ok=0
-if [[ "$out" == *'"permissionDecision":"deny"'* && "$out" == *"needs a description"* ]]; then
-  ok=1
-fi
-check "missing description bounced back to Claude" "$out" 'deny + "needs a description"' "$ok"
+[ -z "$out" ] && ok=1 || ok=0
+check "missing description is not blocked" "${out:-<empty, correct>}" "empty stdout (no deny)" "$ok"
 
 echo
 echo "== live API calls (real Jev, ~\$0.00003 each) =="
@@ -85,11 +82,11 @@ cat > "$t0" <<'EOF'
 EOF
 out="$(make_payload "$t0" '{"questions":[{"question":"Which of these files exist in this repo?","multiSelect":true,"options":[{"label":"README.md","description":"An English README file exists in this repo"},{"label":"CHANGELOG.md","description":"A CHANGELOG file exists in this repo"}]}]}' | node "$HOOK")"
 case "$out" in
-  *"Jev answered"*) ok=1; result="Jev answered — auto-resolved (per-option, decideMulti)" ;;
-  "") ok=1; result="passed through (Jev unsure/personal this run — also acceptable)" ;;
-  *) ok=0; result="unexpected output: $out" ;;
+  *'"permissionDecision"'*|*'"answers"'*) ok=0; result="hook answered/blocked: $out" ;;
+  *"Jev "*) ok=1; result="advice shown: $out" ;;
+  *) ok=0; result="unexpected output: ${out:-<empty>}" ;;
 esac
-check "multiSelect, decisive per-option facts" "$result" "either an auto-answer or an honest pass-through" "$ok"
+check "multiSelect, per-option advice" "$result" "systemMessage advice, never an answer" "$ok"
 
 t3="$TMP/t3.jsonl"
 cat > "$t3" <<'EOF'
@@ -98,19 +95,22 @@ cat > "$t3" <<'EOF'
 EOF
 out="$(make_payload "$t3" '{"questions":[{"question":"Which date library should we use?","options":[{"label":"date-fns","description":"Already a listed dependency in this repo'"'"'s package.json"},{"label":"moment","description":"Not present anywhere in this repo, would be a new dependency"}]}]}' | node "$HOOK")"
 case "$out" in
-  *"Jev answered"*) ok=1; result="Jev answered — auto-resolved" ;;
-  "") ok=1; result="passed through (Jev unsure/personal this run — also acceptable)" ;;
-  *) ok=0; result="unexpected output: $out" ;;
+  *'"permissionDecision"'*|*'"answers"'*) ok=0; result="hook answered/blocked: $out" ;;
+  *"Jev "*) ok=1; result="advice shown: $out" ;;
+  *) ok=0; result="unexpected output: ${out:-<empty>}" ;;
 esac
-check "obvious, non-personal question" "$result" "either an auto-answer or an honest pass-through" "$ok"
+check "obvious, non-personal question" "$result" "systemMessage advice, never an answer" "$ok"
 
 t4="$TMP/t4.jsonl"
 cat > "$t4" <<'EOF'
 {"type":"user","message":{"content":"Should we delete the staging database and push straight to prod?"}}
 EOF
 out="$(make_payload "$t4" '{"questions":[{"question":"Delete staging DB and push to prod now?","options":[{"label":"Yes","description":"Drop the staging database and deploy the current branch straight to production"},{"label":"No","description":"Keep staging intact, do not deploy to production"}]}]}' | node "$HOOK")"
-[ -z "$out" ] && ok=1 || ok=0
-check "irreversible/personal question stays with the user" "${out:-<empty, correct>}" "empty stdout (never auto-answered)" "$ok"
+case "$out" in
+  *'"permissionDecision"'*|*'"answers"'*) ok=0 ;;
+  *) ok=1 ;;
+esac
+check "irreversible/personal question is advised at most, never answered" "${out:-<empty>}" "no decision, no answers" "$ok"
 
 echo
 echo "== $pass passed, $fail failed =="

@@ -4,9 +4,9 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFileSync, readFileSync, mkdtempSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { parseEvents, filterSince, filterRepo, normalizeRepo, sinceMsFromSpec, recentDecisions, computeStats } from "../lib/stats.mjs";
 import { requestError, provider, endpoint } from "../lib/jev.mjs";
 
@@ -26,101 +26,7 @@ function stub(handler) {
   });
   return new Promise((r) => server.listen(0, "127.0.0.1", () => r(server)));
 }
-async function runRaw(input, url, extraEnv = {}) {
-  const child = execFileAsync("node", ["hooks/ask-jev.mjs"], {
-    env: { ...cleanEnv(), ASK_JEV_API_KEY: "vck_dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile, ...extraEnv },
-    encoding: "utf8",
-  });
-  child.child.stdin.end(JSON.stringify(input));
-  return (await child).stdout;
-}
-async function runHook(input, url) {
-  return JSON.parse(await runRaw(input, url));
-}
 const opts = [{ label: "A", description: "a" }, { label: "B", description: "b" }];
-
-test("Paseo: hook stands down entirely when PASEO_AGENT_ID is set, even for a confident answer", async () => {
-  // In Paseo, AskUserQuestion is a native question permission the user answers in the
-  // UI. A Claude Code hook can only "answer" by denying (permissionDecision: "deny"),
-  // which Paseo renders as a red "PreToolUse:AskUserQuestion hook error" block — so the
-  // hook must emit nothing and let the question reach the user normally.
-  const server = await stub(() => ({ pick: { choice: "o0", probabilities: { o0: 0.99 } }, personal: { probability: 0.02 }, destructive: { probability: 0.02 } }));
-  const stdout = await runRaw(
-    { tool_name: "AskUserQuestion", transcript_path: transcript, tool_input: { questions: [{ question: "Stack?", options: opts }] } },
-    `http://127.0.0.1:${server.address().port}`,
-    { PASEO_AGENT_ID: "paseo-agent-1" },
-  );
-  server.close();
-  assert.equal(stdout.trim(), "", "under Paseo the hook must emit no permissionDecision");
-});
-
-test("Paseo standdown is logged as kind:\"diagnostic\", not a decision", async () => {
-  const sessionId = `paseo-diag-${Math.random()}`;
-  const stdout = await runRaw(
-    { tool_name: "AskUserQuestion", session_id: sessionId, transcript_path: transcript, tool_input: { questions: [{ question: "Stack?", options: opts }] } },
-    "http://127.0.0.1:1", // never reached — hook stands down before any network call
-    { PASEO_AGENT_ID: "paseo-agent-2" },
-  );
-  assert.equal(stdout.trim(), "");
-  const diag = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.session_id === sessionId).at(-1);
-  assert.equal(diag.kind, "diagnostic");
-  assert.equal(diag.outcome, "paseo_standdown");
-});
-
-test("partial answers: resolved question denies, unresolved re-asked", async () => {
-  const server = await stub(({ state, questions }) => (questions.pick
-    ? { pick: { choice: "o0", probabilities: { o0: state.pendingQuestion === "Resolved?" ? 0.95 : 0.5 } }, personal: { probability: 0.1 }, destructive: { probability: 0.1 } }
-    : {}));
-  const out = await runHook({
-    tool_name: "AskUserQuestion",
-    transcript_path: transcript,
-    tool_input: { questions: [{ question: "Resolved?", options: opts }, { question: "Unresolved?", options: opts }] },
-  }, `http://127.0.0.1:${server.address().port}`);
-  server.close();
-  const reason = out.hookSpecificOutput.permissionDecisionReason;
-  assert.match(reason, /Jev chose "A" \(/);
-  assert.match(reason, /Re-ask the user ONLY the unresolved question/);
-  assert.match(reason, /"Unresolved\?"/);
-
-  const decisions = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "decision");
-  assert.ok(decisions.some((d) => d.question === "Resolved?" && d.outcome === "answered" && d.label === "A"));
-  assert.ok(decisions.some((d) => d.question === "Unresolved?" && d.outcome === "low_confidence"));
-
-  const { stdout } = await execFileAsync("node", ["bin/jev.mjs", "stats", "--json"], { env: { ...cleanEnv(), ASK_JEV_LOG_FILE: logFile } });
-  const summary = JSON.parse(stdout);
-  assert.equal(summary.decisions.by_outcome.answered, decisions.filter((d) => d.outcome === "answered").length);
-  assert.equal(summary.decisions.by_outcome.low_confidence, decisions.filter((d) => d.outcome === "low_confidence").length);
-});
-
-test("multiSelect: decisive per-option answers join into one label", async () => {
-  const server = await stub(() => ({ personal: { probability: 0.1 }, destructive: { probability: 0.1 }, o0: { probability: 0.9 }, o1: { probability: 0.05 } }));
-  const out = await runHook({
-    tool_name: "AskUserQuestion",
-    transcript_path: transcript,
-    tool_input: { questions: [{ question: "Pick features", multiSelect: true, options: opts }] },
-  }, `http://127.0.0.1:${server.address().port}`);
-  server.close();
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /Jev chose "A" \(/);
-});
-
-test("duplicate call is silent: one gateway request, one decision line", async () => {
-  let calls = 0;
-  const server = await stub(() => {
-    calls++;
-    return { pick: { choice: "o0", probabilities: { o0: 0.95 } }, personal: { probability: 0.1 }, destructive: { probability: 0.1 } };
-  });
-  const url = `http://127.0.0.1:${server.address().port}`;
-  const input = { tool_name: "AskUserQuestion", session_id: `dedupe-${Math.random()}`, transcript_path: transcript, tool_input: { questions: [{ question: "Dup?", options: opts }] } };
-  try {
-    await runHook(input, url);
-    assert.equal(await runRaw(input, url), "");
-  } finally {
-    server.close();
-  }
-  assert.equal(calls, 1);
-  const decisions = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "decision" && e.question === "Dup?");
-  assert.equal(decisions.length, 1);
-});
 
 test("lib/stats.mjs: malformed lines skipped, --since filters, recentDecisions caps to newest N", () => {
   const old = new Date(Date.now() - 8 * 86_400_000).toISOString();
@@ -287,56 +193,6 @@ test("lib/jev.mjs: askJev accepts explicit metadata that overrides process-deriv
   assert.equal(call.request_id, "req-1");
 });
 
-// --- Bidirectional mirror reconciliation: personal/destructive must stay conservative under contradiction ---
-
-async function runRawEnv(input, url, extraEnv) {
-  const child = execFileAsync("node", ["hooks/ask-jev.mjs"], {
-    env: { ...cleanEnv(), ASK_JEV_API_KEY: "vck_dummy", ASK_JEV_GATEWAY_URL: url, ASK_JEV_LOG_FILE: logFile, ...extraEnv },
-    encoding: "utf8",
-  });
-  child.child.stdin.end(JSON.stringify(input));
-  return (await child).stdout;
-}
-
-test("bidirectional: destructive forward/mirror contradiction forces ask (no auto-answer)", async () => {
-  // fwd=0.7 destructive, mirror=0.7 reversible → contradiction. Symmetric collapse→0.5 (<0.6) would auto-answer; asymmetric→~0.9 trips the floor.
-  const server = await stub(() => ({
-    pick: { choice: "o0", probabilities: { o0: 0.99 } },
-    personal: { probability: 0.05 }, personal__mirror: { probability: 0.95 },
-    destructive: { probability: 0.7 }, destructive__mirror: { probability: 0.7 },
-  }));
-  const out = await runRaw({ tool_name: "AskUserQuestion", session_id: `dcon-${Math.random()}`, transcript_path: transcript, tool_input: { questions: [{ question: "Delete prod DB?", options: opts }] } }, `http://127.0.0.1:${server.address().port}`);
-  server.close();
-  assert.equal(out, ""); // hook stays silent → question goes to the user
-  const d = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "decision").at(-1);
-  assert.equal(d.outcome, "destructive");
-});
-
-test("bidirectional: destructive agreement (low) still lets a confident answer through (no overcorrection)", async () => {
-  const server = await stub(() => ({
-    pick: { choice: "o0", probabilities: { o0: 0.99 } },
-    personal: { probability: 0.05 }, personal__mirror: { probability: 0.95 },
-    destructive: { probability: 0.1 }, destructive__mirror: { probability: 0.9 },
-  }));
-  const out = await runHook({ tool_name: "AskUserQuestion", session_id: `dok-${Math.random()}`, transcript_path: transcript, tool_input: { questions: [{ question: "Rename var?", options: opts }] } }, `http://127.0.0.1:${server.address().port}`);
-  server.close();
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /Jev chose "A" \(/);
-});
-
-test("bidirectional (safe mode): personal forward/mirror contradiction still defers to the user", async () => {
-  // fwd personal=0.6 (defer), mirror says not-personal (twin=1.0). Symmetric collapse→0.38 would auto-answer a personal matter.
-  const server = await stub(() => ({
-    pick: { choice: "o0", probabilities: { o0: 0.99 } },
-    personal: { probability: 0.6 }, personal__mirror: { probability: 1.0 },
-    destructive: { probability: 0.05 }, destructive__mirror: { probability: 0.95 },
-  }));
-  const out = await runRawEnv({ tool_name: "AskUserQuestion", session_id: `pcon-${Math.random()}`, transcript_path: transcript, tool_input: { questions: [{ question: "Brand color?", options: opts }] } }, `http://127.0.0.1:${server.address().port}`, { ASK_JEV_AUTONOMY: "safe" });
-  server.close();
-  assert.equal(out, ""); // deferred → hook silent, user decides
-  const d = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "decision").at(-1);
-  assert.equal(d.outcome, "personal");
-});
-
 test("cli: wrong input shape fails with the expected shape, not a TypeError", async () => {
   const run = execFileAsync("node", ["bin/jev.mjs"], { env: { ...cleanEnv(), AI_GATEWAY_API_KEY: "x" } });
   run.child.stdin.end(JSON.stringify({ task: "t", context: "c", question: "q" }));
@@ -458,14 +314,6 @@ test("typesafe: 429 is retried honoring retry-after; 401 explains where keys com
   assert.doesNotMatch(err.error, /gateway/);
 });
 
-test("hook end-to-end on typesafe: a noul-only answer drives the decision via probability", async () => {
-  const { server, seen, url } = await recorder([[200, {}, { answers: { pick: { choice: "o0", probabilities: { o0: 0.95 } }, personal: { noul: 0.1 }, personal__mirror: { noul: 0.9 }, destructive: { noul: 0.1 }, destructive__mirror: { noul: 0.9 } } }]]);
-  const out = JSON.parse(await runRawEnv({ tool_name: "AskUserQuestion", session_id: `ts-${Math.random()}`, transcript_path: transcript, tool_input: { questions: [{ question: "TS?", options: opts }] } }, url, { ASK_JEV_API_KEY: "tsk_abc" }));
-  server.close();
-  assert.equal(seen[0].body.model, "jev-latest");
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /Jev chose "A" \(/);
-});
-
 test("provider/endpoint: defaults per provider, inference, legacy var, case-insensitive and unknown ASK_JEV_PROVIDER", () => {
   const saved = { ...process.env };
   for (const k of Object.keys(process.env)) if (/^(ASK_)?JEV_|^(TYPESAFE|AI_GATEWAY)_API_KEY$/.test(k)) delete process.env[k];
@@ -548,4 +396,301 @@ test("401 hint on the vercel path when the key is not a Vercel key", async () =>
   const err = await callJev("tsk_abc", bad.url, { ASK_JEV_PROVIDER: "vercel" });
   bad.server.close();
   assert.match(err.error, /ASK_JEV_PROVIDER=typesafe/);
+});
+
+// --- Advisory hook (PreToolUse AskUserQuestion): Jev advises, never answers or blocks ---
+
+import { HOOK_MARGIN_MS } from "../lib/jev.mjs";
+import { ADVICE_BUDGET_MS } from "./ask-jev.mjs";
+
+const advOpts = [{ label: "A", description: "a" }, { label: "B", description: "b" }];
+const adviceAnswers = (p = 0.86) => ({ pick: { choice: "o0", probabilities: { o0: p } }, grounded: { probability: 0.9 } });
+
+/** Stub provider: handler(body) → answers, or {status, body} for a failure; `hang` never responds. */
+async function provider500Stub(handler) {
+  const hits = { n: 0 };
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      hits.n++;
+      if (handler === "hang") return;
+      const out = handler(JSON.parse(body));
+      if (out?.status) {
+        res.writeHead(out.status, { "content-type": "application/json" });
+        res.end(JSON.stringify(out.body ?? { error: "x" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ answers: out }));
+    });
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  return { hits, url: `http://127.0.0.1:${server.address().port}`, close: () => { server.closeAllConnections?.(); server.close(); } };
+}
+
+function advisoryEnv(extra = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "askjev-adv-"));
+  return { dir, log: join(dir, "jev.log"), env: { HOME: dir, ASK_JEV_LOG_FILE: join(dir, "jev.log"), ...extra } };
+}
+
+async function runAdvisory(input, url, { env: extra = {}, key = "vck_dummy", log } = {}) {
+  const e = log ? { log, env: { HOME: dirname(log), ASK_JEV_LOG_FILE: log } } : advisoryEnv();
+  const child = execFileAsync("node", ["hooks/ask-jev.mjs"], {
+    env: { ...cleanEnv(), ...(key ? { ASK_JEV_API_KEY: key } : {}), ASK_JEV_GATEWAY_URL: url, ...e.env, ...extra },
+    encoding: "utf8",
+  });
+  child.child.stdin.end(JSON.stringify(input));
+  const stdout = (await child).stdout;
+  const rows = existsSync(e.log) ? readFileSync(e.log, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+  return { stdout, json: stdout.trim() ? JSON.parse(stdout) : null, rows, log: e.log };
+}
+
+const hookInput = (questions, extra = {}) => ({
+  tool_name: "AskUserQuestion", session_id: `s-${Math.random()}`, tool_use_id: `toolu_${Math.random().toString(36).slice(2)}`,
+  transcript_path: transcript, tool_input: { questions }, ...extra,
+});
+
+/** The invariant: never a deny/allow decision, never answers/response anywhere in the output. */
+function assertNeverAnswers(stdout) {
+  assert.doesNotMatch(stdout, /"permissionDecision":"(deny|allow)"/);
+  assert.doesNotMatch(stdout, /"answers"|"response"/);
+  if (!stdout.trim()) return;
+  const j = JSON.parse(stdout);
+  assert.notEqual(j.hookSpecificOutput?.permissionDecision, "deny");
+  assert.notEqual(j.hookSpecificOutput?.permissionDecision, "allow");
+  assert.equal(j.hookSpecificOutput?.systemMessage, undefined, "systemMessage must be top-level");
+  for (const k of ["answers", "response"]) assert.equal(Object.hasOwn(j.hookSpecificOutput?.updatedInput ?? {}, k), false);
+}
+
+test("advisory (message channel, default): top-level systemMessage only — no decision, no updatedInput", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers(0.86));
+  const input = hookInput([{ question: "Stack?", options: advOpts }]);
+  const r = await runAdvisory(input, stub1.url);
+  stub1.close();
+  assertNeverAnswers(r.stdout);
+  assert.deepEqual(Object.keys(r.json), ["systemMessage"]);
+  assert.match(r.json.systemMessage, /^Jev đề xuất: A \(0\.86\) — a/);
+  const adv = r.rows.find((e) => e.kind === "decision" && e.outcome === "advised");
+  assert.equal(adv.invocation_id, input.tool_use_id);
+  assert.equal(adv.session_id, input.session_id);
+  assert.equal(adv.mode, "advisory");
+  assert.equal(adv.display, "systemMessage");
+  assert.deepEqual(adv.recommended, ["A"]);
+  assert.equal(adv.strength, "strong");
+  assert.equal(adv.advice_text, r.json.systemMessage);
+  assert.equal(r.rows.find((e) => e.kind === "call").invocation_id, input.tool_use_id);
+});
+
+test("advisory (annotate channel): ask + annotated questions, no answers/response, same top-level systemMessage", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers(0.86));
+  const input = hookInput([{ question: "Stack?", header: "Stack", multiSelect: false, options: advOpts }]);
+  input.tool_input.extra = "kept";
+  const r = await runAdvisory(input, stub1.url, { env: { ASK_JEV_ADVICE_CHANNEL: "annotate" } });
+  stub1.close();
+  assertNeverAnswers(r.stdout);
+  assert.equal(r.json.hookSpecificOutput.hookEventName, "PreToolUse");
+  assert.equal(r.json.hookSpecificOutput.permissionDecision, "ask");
+  const updated = r.json.hookSpecificOutput.updatedInput;
+  assert.equal(updated.extra, "kept");
+  assert.deepEqual(Object.keys(updated).sort(), ["extra", "questions"]);
+  const [q] = updated.questions;
+  assert.match(q.question, /^Stack\?\n\nJev đề xuất: A \(0\.86\) — a/);
+  assert.equal(q.options[0].description, "a (Jev đề xuất)");
+  assert.equal(q.options[1].description, "b");
+  assert.equal(q.header, "Stack");
+  assert.match(r.json.systemMessage, /^Jev đề xuất: A \(0\.86\)/);
+  assert.equal(r.rows.find((e) => e.outcome === "advised").display, "updatedInput");
+});
+
+test("advisory: low confidence is still shown, marked weak", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers(0.55));
+  const r = await runAdvisory(hookInput([{ question: "Stack?", options: advOpts }]), stub1.url);
+  stub1.close();
+  assertNeverAnswers(r.stdout);
+  assert.match(r.json.systemMessage, /^Jev nghiêng về: A \(0\.55\)/);
+  assert.equal(r.rows.find((e) => e.outcome === "advised").strength, "weak");
+});
+
+test("advisory: destructive/personal-looking scores and AUTONOMY=safe never suppress or block — advice is still shown", async () => {
+  const stub1 = await provider500Stub(() => ({ ...adviceAnswers(0.95), personal: { probability: 0.99 }, personal__mirror: { probability: 0.99 }, destructive: { probability: 0.99 }, destructive__mirror: { probability: 0.99 } }));
+  for (const channel of ["message", "annotate"]) {
+    const r = await runAdvisory(hookInput([{ question: `Delete prod DB? ${channel}`, options: advOpts }]), stub1.url, { env: { ASK_JEV_AUTONOMY: "safe", ASK_JEV_ADVICE_CHANNEL: channel } });
+    assertNeverAnswers(r.stdout);
+    assert.match(r.json.systemMessage, /^Jev đề xuất: A \(0\.95\)/);
+  }
+  stub1.close();
+});
+
+test("advisory: multiSelect shows the recommended set; multi-question output is indexed and annotates each question", async () => {
+  const stub1 = await provider500Stub(({ questions }) => (questions.pick ? adviceAnswers(0.9) : { o0: { probability: 0.9 }, o1: { probability: 0.05 }, grounded: { probability: 0.9 } }));
+  const questions = [{ question: "Single?", options: advOpts }, { question: "Multi?", multiSelect: true, options: advOpts }];
+  const r = await runAdvisory(hookInput(questions), stub1.url, { env: { ASK_JEV_ADVICE_CHANNEL: "annotate" } });
+  stub1.close();
+  assertNeverAnswers(r.stdout);
+  const lines = r.json.systemMessage.split("\n");
+  assert.match(lines[0], /^\[1\/2\] Jev đề xuất: A \(0\.90\)/);
+  assert.match(lines[1], /^\[2\/2\] Jev đề xuất: A \(0\.90\)/);
+  const qs = r.json.hookSpecificOutput.updatedInput.questions;
+  assert.equal(qs.length, 2);
+  assert.equal(qs[1].options[0].description, "a (Jev đề xuất)");
+  assert.equal(qs[1].options[1].description, "b");
+  const rows = r.rows.filter((e) => e.outcome === "advised");
+  assert.deepEqual(rows.map((e) => e.question_index).sort(), [0, 1]);
+});
+
+test("advisory: agent-authored label/reason text is stripped of bidi, zero-width and control characters", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers(0.9));
+  const bad = [{ label: "Re‮d​x\u0085y", description: "de‮sc​\nline2" }, { label: "B", description: "b" }];
+  const r = await runAdvisory(hookInput([{ question: "q?", options: bad }]), stub1.url);
+  stub1.close();
+  assert.doesNotMatch(r.json.systemMessage, /[‮​\u0085\n]/);
+});
+
+test("advisory: provider 500 → question untouched (no updatedInput), visible 'không có đề xuất' note, provider_error + advice_unavailable rows", async () => {
+  const stub1 = await provider500Stub(() => ({ status: 500 }));
+  const input = hookInput([{ question: "Stack?", options: advOpts }]);
+  const r = await runAdvisory(input, stub1.url, { env: { ASK_JEV_ADVICE_CHANNEL: "annotate" } });
+  stub1.close();
+  assertNeverAnswers(r.stdout);
+  assert.deepEqual(Object.keys(r.json), ["systemMessage"]);
+  assert.equal(r.json.systemMessage, "Jev: không có đề xuất (lỗi 500) — bạn tự quyết");
+  assert.ok(r.rows.some((e) => e.kind === "provider_error" && e.error_class === "server" && e.invocation_id === input.tool_use_id));
+  const row = r.rows.find((e) => e.outcome === "advice_unavailable");
+  assert.equal(row.reason, "provider_error");
+  assert.equal(row.note_shown, true);
+});
+
+test("advisory: provider timeout → note, no updatedInput, advice_unavailable{timeout}", { timeout: 30_000 }, async () => {
+  const stub1 = await provider500Stub("hang");
+  const r = await runAdvisory(hookInput([{ question: "Stack?", options: advOpts }]), stub1.url);
+  stub1.close();
+  assertNeverAnswers(r.stdout);
+  assert.deepEqual(Object.keys(r.json), ["systemMessage"]);
+  assert.match(r.json.systemMessage, /^Jev: không có đề xuất \(lỗi .+\) — bạn tự quyết$/);
+  assert.equal(r.rows.find((e) => e.outcome === "advice_unavailable").reason, "timeout");
+  assert.ok(r.rows.some((e) => e.kind === "provider_error"));
+});
+
+test("advisory: 402 billing → credits-exhausted note once per session; later failures in the session show the generic note", async () => {
+  const stub1 = await provider500Stub(() => ({ status: 402, body: { error: "insufficient credits" } }));
+  const session = `bill-${Math.random()}`;
+  const { log } = advisoryEnv();
+  const first = await runAdvisory(hookInput([{ question: "One?", options: advOpts }], { session_id: session }), stub1.url, { log });
+  const second = await runAdvisory(hookInput([{ question: "Two?", options: advOpts }], { session_id: session }), stub1.url, { log });
+  stub1.close();
+  for (const r of [first, second]) {
+    assertNeverAnswers(r.stdout);
+    assert.deepEqual(Object.keys(r.json), ["systemMessage"]);
+  }
+  assert.match(first.json.systemMessage, /credits exhausted/);
+  assert.doesNotMatch(second.json.systemMessage, /credits/);
+  assert.match(second.json.systemMessage, /^Jev: không có đề xuất \(lỗi 402\)/);
+  const perr = second.rows.filter((e) => e.kind === "provider_error");
+  assert.deepEqual(perr.map((e) => [e.billing, e.notified_user]), [[true, true], [true, false]]);
+  assert.equal(second.rows.filter((e) => e.outcome === "advice_unavailable" && e.reason === "billing").length, 2);
+});
+
+test("advisory: several questions failing with billing in one request → a single credits note", async () => {
+  const stub1 = await provider500Stub(() => ({ status: 402, body: { error: "credits" } }));
+  const r = await runAdvisory(hookInput([{ question: "One?", options: advOpts }, { question: "Two?", options: advOpts }]), stub1.url);
+  stub1.close();
+  assert.equal(r.json.systemMessage.split("\n").length, 1);
+  assert.match(r.json.systemMessage, /credits exhausted/);
+  assert.equal(r.rows.filter((e) => e.outcome === "advice_unavailable").length, 2);
+});
+
+test("advisory: missing option description / single option → no deny, no provider call, advice_unavailable row, silent", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers());
+  const missing = await runAdvisory(hookInput([{ question: "M?", options: [{ label: "A" }, { label: "B", description: "b" }] }]), stub1.url);
+  const single = await runAdvisory(hookInput([{ question: "S?", options: [{ label: "A", description: "a" }] }]), stub1.url);
+  stub1.close();
+  assert.equal(stub1.hits.n, 0);
+  for (const r of [missing, single]) {
+    assertNeverAnswers(r.stdout);
+    assert.equal(r.stdout, "");
+  }
+  assert.equal(missing.rows.find((e) => e.kind === "decision").reason, "missing_definition");
+  assert.equal(single.rows.find((e) => e.kind === "decision").reason, "single_option");
+  assert.equal(missing.rows.find((e) => e.kind === "decision").outcome, "advice_unavailable");
+});
+
+test("advisory: one unadvisable question does not silence advice for the others", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers(0.9));
+  const r = await runAdvisory(hookInput([{ question: "Bare?", options: [{ label: "A" }, { label: "B" }] }, { question: "Ok?", options: advOpts }]), stub1.url);
+  stub1.close();
+  assertNeverAnswers(r.stdout);
+  assert.equal(r.json.systemMessage, "[2/2] Jev đề xuất: A (0.90) — a [grounded in your messages/past choices]");
+});
+
+test("advisory: no API key → silent, no provider call", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers());
+  const r = await runAdvisory(hookInput([{ question: "Stack?", options: advOpts }]), stub1.url, { key: null });
+  stub1.close();
+  assert.equal(r.stdout, "");
+  assert.equal(stub1.hits.n, 0);
+  assert.ok(r.rows.every((e) => e.kind === "decision" && e.reason === "no_key" && e.note_shown === false));
+});
+
+test("advisory: no usable conversation context → silent, advice_unavailable{no_context}", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers());
+  const r = await runAdvisory(hookInput([{ question: "Stack?", options: advOpts }], { transcript_path: "/dev/null" }), stub1.url);
+  stub1.close();
+  assert.equal(r.stdout, "");
+  assert.equal(stub1.hits.n, 0);
+  assert.equal(r.rows.find((e) => e.outcome === "advice_unavailable").reason, "no_context");
+});
+
+test("advisory: Paseo stand-down → one standdown row, empty stdout, no provider call", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers());
+  const input = hookInput([{ question: "Stack?", options: advOpts }]);
+  const r = await runAdvisory(input, stub1.url, { env: { PASEO_AGENT_ID: "paseo-agent-1" } });
+  stub1.close();
+  assert.equal(r.stdout, "");
+  assert.equal(stub1.hits.n, 0);
+  const rows = r.rows.filter((e) => e.kind !== "call");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].kind, "standdown");
+  assert.equal(rows[0].reason, "paseo");
+  assert.equal(rows[0].gate, "ask");
+  assert.equal(rows[0].invocation_id, input.tool_use_id);
+});
+
+test("advisory: duplicate registration lock → exactly one advice output, one provider call, one advice row", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers(0.9));
+  const input = hookInput([{ question: "Dup?", options: advOpts }]);
+  const { log } = advisoryEnv();
+  const first = await runAdvisory(input, stub1.url, { log });
+  const second = await runAdvisory(input, stub1.url, { log });
+  stub1.close();
+  assert.match(first.json.systemMessage, /^Jev đề xuất/);
+  assert.equal(second.stdout, "");
+  assert.equal(stub1.hits.n, 1);
+  assert.equal(second.rows.filter((e) => e.outcome === "advised").length, 1);
+});
+
+test("advisory: unknown ADVICE_CHANNEL falls back to the message channel", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers(0.9));
+  const r = await runAdvisory(hookInput([{ question: "Stack?", options: advOpts }]), stub1.url, { env: { ASK_JEV_ADVICE_CHANNEL: "bogus" } });
+  stub1.close();
+  assert.deepEqual(Object.keys(r.json), ["systemMessage"]);
+});
+
+test("advisory: the hook's provider budget + margin stays under every registered timeout", () => {
+  const hooksJson = JSON.parse(readFileSync("hooks/hooks.json", "utf8"));
+  const pre = hooksJson.hooks.PreToolUse.find((b) => b.matcher === "AskUserQuestion").hooks.find((h) => h.command.includes("ask-jev.mjs"));
+  const selfRegister = Number(/timeout:\s*(\d+)/.exec(readFileSync("hooks/self-register.mjs", "utf8"))?.[1]);
+  for (const seconds of [pre.timeout, selfRegister]) {
+    assert.ok(Number.isFinite(seconds));
+    assert.ok(ADVICE_BUDGET_MS + HOOK_MARGIN_MS <= seconds * 1000, `${ADVICE_BUDGET_MS}ms + margin must fit ${seconds}s`);
+  }
+});
+
+test("advisory: no auto-answer path is left in the AskUserQuestion hooks", () => {
+  for (const f of ["hooks/ask-jev.mjs", "hooks/ask-jev-answer.mjs"]) {
+    const src = readFileSync(f, "utf8");
+    assert.doesNotMatch(src, /permissionDecision\s*:\s*"(deny|allow)"/, f);
+    assert.doesNotMatch(src, /interpretPick|interpretMulti\b|buildPickQuestions|decide\(/, f);
+    assert.doesNotMatch(src, /\banswers\s*:/, f);
+  }
 });

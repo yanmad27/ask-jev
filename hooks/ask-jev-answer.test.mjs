@@ -1,7 +1,7 @@
 import { cleanEnv } from "./testenv.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -9,76 +9,176 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = process.cwd();
-
-async function runAnswerHook(toolResponse, logFile) {
-  const script = join(repoRoot, "hooks", "ask-jev-answer.mjs");
-  const input = { tool_name: "AskUserQuestion", session_id: "sess-1", cwd: "/repo", tool_response: toolResponse };
-  const child = execFileAsync("node", [script], { env: { ...cleanEnv(), ASK_JEV_API_KEY: "vck_dummy", ASK_JEV_LOG_FILE: logFile }, encoding: "utf8" });
-  child.child.stdin.end(JSON.stringify(input));
-  await child;
-}
-
-function userChoices(logFile) {
-  return readFileSync(logFile, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((e) => e.kind === "user_choice");
-}
+const OPTS = [{ label: "Blue", description: "b" }, { label: "Red", description: "r" }, { label: "Green", description: "g" }];
 
 function tmpLog() {
   return join(mkdtempSync(join(tmpdir(), "answer-hook-log-")), "jev.log");
 }
 
-test("ask-jev-answer.mjs: tool_response.content as a content-block array (text parts) is parsed like a string", async () => {
-  const logFile = tmpLog();
-  const toolResponse = { content: [{ type: "text", text: 'Your questions have been answered: "Pick a color"="Blue". You can now continue with these answers in mind.' }] };
-  await runAnswerHook(toolResponse, logFile);
+/** Seed the PreToolUse advice rows of one invocation, exactly as hooks/ask-jev.mjs writes them. */
+function seedAdvice(logFile, toolUseId, rows) {
+  const lines = rows.map((r, i) => JSON.stringify({
+    kind: "decision", gate: "ask", mode: "advisory", invocation_id: toolUseId, session_id: "sess-1", question_index: i,
+    question: r.question, options: OPTS.map((o) => o.label), ...(r.advice ?? { outcome: "advice_unavailable", reason: "provider_error" }),
+  }));
+  writeFileSync(logFile, lines.join("\n") + "\n");
+}
+const advised = (recommended, confidence = 0.86) => ({ outcome: "advised", recommended, confidence, strength: "strong" });
 
-  const events = userChoices(logFile);
-  assert.equal(events.length, 1);
-  assert.equal(events[0].question, "Pick a color");
-  assert.deepEqual(events[0].chosen, ["Blue"]);
-  assert.equal(events[0].kind_of_answer, "option");
+async function runAnswerHook(toolResponse, logFile, extra = {}) {
+  const script = join(repoRoot, "hooks", "ask-jev-answer.mjs");
+  const input = { tool_name: "AskUserQuestion", session_id: "sess-1", tool_use_id: "toolu_1", cwd: "/repo", tool_response: toolResponse, ...extra };
+  const child = execFileAsync("node", [script], { env: { ...cleanEnv(), ASK_JEV_API_KEY: "vck_dummy", ASK_JEV_LOG_FILE: logFile }, encoding: "utf8" });
+  child.child.stdin.end(JSON.stringify(input));
+  await child;
+}
+
+function outcomes(logFile) {
+  if (!existsSync(logFile)) return [];
+  return readFileSync(logFile, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((e) => e.kind === "outcome");
+}
+
+const answered = (...pairs) => `Your questions have been answered: ${pairs.map(([q, a]) => `"${q}"="${a}"`).join(", ")}. You can now continue with these answers in mind.`;
+const toolInput = (...questions) => ({ questions: questions.map((q) => ({ options: OPTS, multiSelect: false, ...q })) });
+
+test("outcome: a pick that matches Jev's recommendation → agree, linked by tool_use_id", async () => {
+  const log = tmpLog();
+  seedAdvice(log, "toolu_1", [{ question: "Color?", advice: advised(["Blue"]) }]);
+  await runAnswerHook(answered(["Color?", "Blue"]), log, { tool_input: toolInput({ question: "Color?" }) });
+  const [o] = outcomes(log);
+  assert.equal(o.invocation_id, "toolu_1");
+  assert.equal(o.question, "Color?");
+  assert.equal(o.question_index, 0);
+  assert.deepEqual(o.options, ["Blue", "Red", "Green"]);
+  assert.deepEqual(o.chosen, ["Blue"]);
+  assert.equal(o.kind_of_answer, "option");
+  assert.equal(o.advice_shown, true);
+  assert.deepEqual(o.recommended, ["Blue"]);
+  assert.equal(o.recommended_confidence, 0.86);
+  assert.equal(o.agreement, "agree");
+  assert.equal(o.cwd, "/repo");
 });
 
-test("ask-jev-answer.mjs: multiple text parts in the content array are concatenated before matching", async () => {
-  const logFile = tmpLog();
-  const toolResponse = {
-    content: [
-      { type: "text", text: 'The user answered: "Where is it?"=' },
-      { type: "text", text: '"~/Downloads/logo.png". Read the answers carefully.' },
-    ],
-  };
-  await runAnswerHook(toolResponse, logFile);
-
-  const events = userChoices(logFile);
-  assert.equal(events.length, 1);
-  assert.equal(events[0].question, "Where is it?");
-  assert.deepEqual(events[0].chosen, ["~/Downloads/logo.png"]);
-  assert.equal(events[0].kind_of_answer, "free_text");
+test("outcome: a different pick → disagree, with both sides recorded", async () => {
+  const log = tmpLog();
+  seedAdvice(log, "toolu_1", [{ question: "Color?", advice: advised(["Blue"]) }]);
+  await runAnswerHook(answered(["Color?", "Red"]), log, { tool_input: toolInput({ question: "Color?" }) });
+  const [o] = outcomes(log);
+  assert.equal(o.agreement, "disagree");
+  assert.deepEqual(o.chosen, ["Red"]);
+  assert.deepEqual(o.recommended, ["Blue"]);
 });
 
-test("ask-jev-answer.mjs: object with a plain string content still works (existing shape)", async () => {
-  const logFile = tmpLog();
-  const toolResponse = { content: 'Your questions have been answered: "Stack?"="Node". You can now continue with these answers in mind.' };
-  await runAnswerHook(toolResponse, logFile);
-
-  const events = userChoices(logFile);
-  assert.equal(events.length, 1);
-  assert.equal(events[0].question, "Stack?");
-  assert.deepEqual(events[0].chosen, ["Node"]);
+test("outcome: free-text 'Other' → free_text kind and agreement, still carries the recommendation", async () => {
+  const log = tmpLog();
+  seedAdvice(log, "toolu_1", [{ question: "Where is it?", advice: advised(["Blue"], 0.7) }]);
+  await runAnswerHook('The user answered: "Where is it?"="~/Downloads/logo.png". Read the answers carefully.', log, { tool_input: toolInput({ question: "Where is it?" }) });
+  const [o] = outcomes(log);
+  assert.equal(o.kind_of_answer, "free_text");
+  assert.equal(o.agreement, "free_text");
+  assert.deepEqual(o.chosen, ["~/Downloads/logo.png"]);
+  assert.deepEqual(o.recommended, ["Blue"]);
 });
 
-test("ask-jev-answer.mjs: non-matching or malformed content arrays never log and never throw", async () => {
-  const logFile = tmpLog();
-  await runAnswerHook({ content: [{ type: "text", text: "Tool permission request failed: canceled" }] }, logFile);
-  await runAnswerHook({ content: [{ type: "image", source: {} }] }, logFile);
-  await runAnswerHook({ content: 123 }, logFile);
-  await runAnswerHook({}, logFile);
+test("outcome: a free-text answer inside an option-prefixed multi-question response is classified per question", async () => {
+  const log = tmpLog();
+  seedAdvice(log, "toolu_1", [{ question: "One?", advice: advised(["Blue"]) }, { question: "Two?", advice: advised(["Red"]) }]);
+  await runAnswerHook(answered(["One?", "Blue"], ["Two?", "something else"]), log, { tool_input: toolInput({ question: "One?" }, { question: "Two?" }) });
+  const [a, b] = outcomes(log);
+  assert.deepEqual([a.kind_of_answer, a.agreement, a.question_index], ["option", "agree", 0]);
+  assert.deepEqual([b.kind_of_answer, b.agreement, b.question_index], ["free_text", "free_text", 1]);
+});
 
-  let raw = "";
-  try {
-    raw = readFileSync(logFile, "utf8");
-  } catch {
-    // no log file at all is also a pass — nothing matched
+test("outcome: multiSelect — same set agrees, overlap is partial, disjoint disagrees; labels containing ', ' stay whole", async () => {
+  const opts = [...OPTS, { label: "Cyan, light", description: "c" }];
+  const cases = [
+    [["Blue", "Red"], "Blue, Red", "agree", ["Blue", "Red"]],
+    [["Blue", "Red"], "Blue, Green", "partial", ["Blue", "Green"]],
+    [["Blue"], "Green, Cyan, light", "disagree", ["Green", "Cyan, light"]],
+  ];
+  for (const [recommended, answer, agreement, chosen] of cases) {
+    const log = tmpLog();
+    seedAdvice(log, "toolu_1", [{ question: "Colors?", advice: advised(recommended, 0.9) }]);
+    await runAnswerHook(answered(["Colors?", answer]), log, { tool_input: { questions: [{ question: "Colors?", multiSelect: true, options: opts }] } });
+    const [o] = outcomes(log);
+    assert.equal(o.agreement, agreement, answer);
+    assert.deepEqual(o.chosen, chosen, answer);
+    assert.equal(o.kind_of_answer, "option");
   }
-  const events = raw.trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)).filter((e) => e.kind === "user_choice");
-  assert.equal(events.length, 0);
+});
+
+test("outcome: advice_unavailable or no advice row → agreement no_advice, advice_shown false", async () => {
+  const log = tmpLog();
+  seedAdvice(log, "toolu_1", [{ question: "Color?" }]);
+  await runAnswerHook(answered(["Color?", "Blue"]), log, { tool_input: toolInput({ question: "Color?" }) });
+  await runAnswerHook(answered(["Color?", "Blue"]), log, { tool_use_id: "toolu_unknown", tool_input: toolInput({ question: "Color?" }) });
+  for (const o of outcomes(log)) {
+    assert.equal(o.agreement, "no_advice");
+    assert.equal(o.advice_shown, false);
+    assert.equal(o.recommended, null);
+    assert.equal(o.recommended_confidence, null);
+  }
+  assert.equal(outcomes(log).length, 2);
+});
+
+test("outcome: the annotate channel's rewritten question text still joins to the advice row, and the original text is recorded", async () => {
+  const log = tmpLog();
+  seedAdvice(log, "toolu_1", [{ question: "Color?", advice: advised(["Blue"]) }]);
+  const annotated = "Color?\n\nJev đề xuất: Blue (0.86) — b";
+  // PostToolUse tool_input may be either the original or the annotated one — both must join.
+  await runAnswerHook(answered([annotated, "Blue"]), log, { tool_input: toolInput({ question: "Color?" }) });
+  await runAnswerHook(answered([annotated, "Red"]), log, { tool_input: toolInput({ question: annotated }) });
+  await runAnswerHook(answered([annotated, "Blue"]), log, {});
+  const rows = outcomes(log);
+  assert.deepEqual(rows.map((o) => o.agreement), ["agree", "disagree", "agree"]);
+  assert.ok(rows.every((o) => o.question_index === 0 && o.invocation_id === "toolu_1"));
+  assert.equal(rows[0].question, "Color?");
+});
+
+test("outcome: an unparsable tool_response is logged as kind_of_answer 'unparsed', never dropped", async () => {
+  const log = tmpLog();
+  seedAdvice(log, "toolu_1", [{ question: "Color?", advice: advised(["Blue"]) }]);
+  await runAnswerHook("Something Claude Code never wrote before", log, { tool_input: toolInput({ question: "Color?" }) });
+  await runAnswerHook({ content: [{ type: "image", source: {} }] }, log);
+  await runAnswerHook({}, log);
+  const rows = outcomes(log);
+  assert.equal(rows.length, 3);
+  for (const o of rows) {
+    assert.equal(o.kind_of_answer, "unparsed");
+    assert.deepEqual(o.chosen, []);
+    assert.equal(o.invocation_id, "toolu_1");
+    assert.equal(o.agreement, "unparsed");
+  }
+  assert.equal(rows[0].advice_shown, true);
+  assert.equal(rows[0].response_shape, "string");
+  assert.equal(rows[2].response_shape, "object:");
+});
+
+test("outcome: tool_response.content as a content-block array (text parts) is parsed like a string", async () => {
+  const log = tmpLog();
+  await runAnswerHook({ content: [{ type: "text", text: answered(["Pick a color", "Blue"]) }] }, log);
+  const [o] = outcomes(log);
+  assert.equal(o.question, "Pick a color");
+  assert.deepEqual(o.chosen, ["Blue"]);
+  assert.equal(o.kind_of_answer, "option");
+});
+
+test("outcome: multiple text parts are concatenated before matching, an escaped quote survives, and a bare string content works", async () => {
+  const log = tmpLog();
+  await runAnswerHook({ content: [{ type: "text", text: 'The user answered: "Where is it?"=' }, { type: "text", text: '"~/Downloads/logo.png". Read the answers carefully.' }] }, log);
+  await runAnswerHook({ content: answered(["Stack?", 'No\\"de']) }, log);
+  const [a, b] = outcomes(log);
+  assert.deepEqual(a.chosen, ["~/Downloads/logo.png"]);
+  assert.equal(a.kind_of_answer, "free_text");
+  assert.deepEqual(b.chosen, ['No"de']);
+});
+
+test("answer hook is silent without an API key and never emits a decision on stdout", async () => {
+  const log = tmpLog();
+  const script = join(repoRoot, "hooks", "ask-jev-answer.mjs");
+  const child = execFileAsync("node", [script], { env: { ...cleanEnv(), HOME: mkdtempSync(join(tmpdir(), "nohome-")), ASK_JEV_LOG_FILE: log }, encoding: "utf8" });
+  child.child.stdin.end(JSON.stringify({ tool_name: "AskUserQuestion", tool_use_id: "t", tool_response: answered(["Q?", "A"]) }));
+  const { stdout } = await child;
+  assert.equal(stdout, "");
+  assert.equal(outcomes(log).length, 0);
 });
