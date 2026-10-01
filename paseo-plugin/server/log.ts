@@ -25,6 +25,11 @@ interface StatsSummary {
     fallback_pct: number;
   };
   user_overrides: number;
+  human_answers: number;
+  agreement: JevStats["agreement"];
+  advisory: JevStats["advisory"];
+  provider_errors: JevStats["provider_errors"];
+  standdowns: JevStats["standdowns"];
 }
 
 interface LogEvent {
@@ -90,7 +95,12 @@ function emptyStats(path: string, scope: string): JevStats {
     hasLog: false,
     calls: { total: 0, ok: 0, error: 0, avg_latency_ms: 0, p95_latency_ms: 0 },
     decisions: { total: 0, by_outcome: {}, by_gate: {}, positive_pct: 0, fallback_pct: 0 },
+    human_answers: 0,
     user_overrides: 0,
+    agreement: { compared: 0, agree: 0, disagree: 0, partial: 0, agreement_pct: 0 },
+    advisory: { questions: 0, advised: 0, advice_unavailable: 0, unavailable_by_reason: {}, strong: 0, weak: 0 },
+    provider_errors: { total: 0, by_class: {} },
+    standdowns: { total: 0, by_reason: {} },
     recent: [],
   };
 }
@@ -119,7 +129,12 @@ export function getStats({ since, outcome, gate, cwd }: RpcInput<typeof jevStats
     hasLog: true,
     calls: summary.calls,
     decisions: summary.decisions,
+    human_answers: summary.human_answers,
     user_overrides: summary.user_overrides,
+    agreement: summary.agreement,
+    advisory: summary.advisory,
+    provider_errors: summary.provider_errors,
+    standdowns: summary.standdowns,
     recent: recent.map((d) => ({
       ts: d.ts,
       event_id: d.event_id,
