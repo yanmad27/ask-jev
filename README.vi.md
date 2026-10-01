@@ -135,6 +135,14 @@ bạn không?" nữa — câu hỏi về sở thích, cá nhân, thậm chí ph�
 được đề xuất, vì bạn là người quyết. Xem [Bạn sẽ thấy gì](#bạn-sẽ-thấy-gì) để
 biết định dạng.
 
+Dòng đề xuất có dạng `Jev đề xuất: <option> (<độ tin>) — <thẻ grounded>`
+(`Jev nghiêng về:` khi độ tin dưới ngưỡng). "Lý do" một dòng là một **thẻ grounded** do
+chính plugin sinh ra — lựa chọn có dựa trên lời bạn nói hay lựa chọn trước đây của bạn không —
+và không bao giờ là văn bản chép từ mô tả option của agent (mô tả vẫn hiện ngay trên option),
+nên agent không thể giả dòng của Jev. Nếu câu hỏi, header, nhãn hay mô tả do agent viết đã chứa
+dấu hiệu của Jev, hook không chú thích gì: nó quay về kênh `message` và ghi một diagnostic
+`jev_marker_in_agent_text`.
+
 **Đề xuất tới tay bạn thế nào** là một cài đặt, `ASK_JEV_ADVICE_CHANNEL`:
 
 | Kênh | Điều gì xảy ra |
@@ -148,6 +156,10 @@ bạn chọn. Vì nội dung câu hỏi là thứ Claude Code dùng làm khoá c
 câu trả lời Claude nhận được mang khoá là câu hỏi đã chú thích, nên Claude cũng
 thấy dòng của Jev ở đó, được gắn nhãn là của Jev. [Log](#usage-analytics) giữ
 câu hỏi **gốc** làm văn bản chuẩn.
+
+`annotate` (`permissionDecision: "ask"` + `updatedInput`) chỉ được xác minh ở các chế độ quyền
+mặc định, `acceptEdits` và `plan`. Ở chế độ khác (`bypassPermissions`, `dontAsk`, …) hook dùng
+kênh `message`: chỉ một `systemMessage`, không có `permissionDecision`, không có `updatedInput`.
 
 Với nhiều câu hỏi trong một lời gọi, mỗi câu có một dòng riêng, tiền tố
 `[1/3]`, `[2/3]`, …; câu hỏi `multiSelect` được phán đoán từng option và có
@@ -228,8 +240,8 @@ gửi, upload, mời, mua hay xoá) đều đi qua `AskUserQuestion`, nơi Jev c
 xuất và bạn trả lời.
 
 Một hook `SessionStart` chèn một quy tắc ngắn nói đúng điều đó. Hai
-hook chạy ở mỗi lần bắt đầu session: `self-register.mjs`, dùng để lách một
-lỗi của Claude Code khiến hook `PreToolUse` của plugin không chạy được (xem
+hook chạy ở mỗi lần bắt đầu session: `self-register.mjs`, là cách lách để
+tương thích với các bản Claude Code mà hook `PreToolUse` của plugin không chạy (xem
 [Ghi chú triển khai](#ghi-chú-triển-khai)), và `session-start.mjs`, chèn
 quy tắc đó. Cả hai đều im lặng nếu chưa cấu hình API key.
 
@@ -479,7 +491,7 @@ Tất cả đều tuỳ chọn — mặc định đã hợp lý sẵn.
 | `AI_GATEWAY_API_KEY` | — | deprecated: Vercel AI Gateway key cũ, chỉ là fallback |
 | `ASK_JEV_PROVIDER` | suy từ key | `typesafe` hoặc `vercel`; key `vck_` suy ra `vercel`, còn lại `typesafe` |
 | `ASK_JEV_ASK_THRESHOLD` | `0.8` | ranh giới "mạnh" cho đề xuất `AskUserQuestion` (`Jev đề xuất` từ ngưỡng này trở lên, `Jev nghiêng về` bên dưới) và độ tin mà Claude có thể hành động theo đáp án CLI |
-| `ASK_JEV_ADVICE_CHANNEL` | `annotate` | cách hiển thị đề xuất `AskUserQuestion`: `annotate` (nối vào câu hỏi và option được đề xuất qua `updatedInput`, kèm một `systemMessage`) hoặc `message` (chỉ `systemMessage` — chỉ thấy sau khi hộp thoại đóng); giá trị khác đều là `annotate` |
+| `ASK_JEV_ADVICE_CHANNEL` | `annotate` | cách hiển thị đề xuất `AskUserQuestion`: `annotate` (nối vào câu hỏi và option được đề xuất qua `updatedInput`, kèm một `systemMessage`) hoặc `message` (chỉ `systemMessage` — chỉ thấy sau khi hộp thoại đóng); giá trị khác đều là `annotate`. `annotate` tự động quay về `message` ngoài các chế độ quyền mặc định/`acceptEdits`/`plan`, hoặc khi văn bản của agent chứa dấu hiệu của Jev |
 | `ASK_JEV_REMIND` | (bật) | đặt `0` để tắt lời nhắc "ask Jev" mỗi lượt |
 | `ASK_JEV_GATES` | `permission,stop,bash,prompt` | danh sách các [gate tự động](#3-các-gate-tự-động) đang bật, phân tách bởi dấu phẩy; đặt nhưng để trống (`ASK_JEV_GATES=`) tắt cả bốn |
 | `ASK_JEV_STATE_CHARS` | `70000` | số ký tự ngữ cảnh tối đa gửi cho Jev mỗi lần gọi gate — giảm xuống để gate nhanh/rẻ hơn |
@@ -542,7 +554,7 @@ agent Paseo, nếu có).
 | `question` / `question_text` | xem bảng kế tiếp; luôn là câu hỏi **gốc**, kể cả khi bản đã chú thích mới là bản được hiện | 300 ký tự |
 | `options`, `chosen`, `recommended` | nhãn option, lựa chọn của bạn, pick của Jev — mỗi phần tử của danh sách bị cắt riêng, tối đa 50 phần tử | 300 mỗi phần tử |
 | `advice_text` | dòng đề xuất bạn đã thấy | 300 |
-| `reason` | tiêu chí khớp, hoặc với đề xuất là mô tả option + tag grounded | 160 |
+| `reason` | tiêu chí khớp, hoặc với đề xuất là thẻ grounded | 160 |
 | `question_name` | tên câu hỏi của CLI | 120 |
 | `warnings` | cờ kiểm tra của CLI (`class`, `path`, `message`), tối đa 20 | 300 mỗi chuỗi |
 | `error` / `message` | văn bản lỗi của provider, đã redact key, token và credential trong URL | 200 |
@@ -738,16 +750,15 @@ Với mỗi câu hỏi nó ghi một dòng `outcome` có `recommended`, `chosen`
 `no_advice` khi chưa hiện đề xuất nào). Cả nội dung câu hỏi gốc lẫn bản đã chú
 thích đều được chấp nhận làm khoá; dòng log lưu bản gốc.
 
-**Vì sao có thêm một hook `SessionStart`.** Claude Code hiện không chạy hook
-`PreToolUse` của riêng plugin
-([anthropics/claude-code#36397](https://github.com/anthropics/claude-code/issues/36397))
-— chỉ `SessionStart` chạy ổn định từ một plugin. Nên `hooks/self-register.mjs`
-chạy ở mỗi `SessionStart` và ghi thẳng entry `PreToolUse` vào
-`~/.claude/settings.json` của bạn, nơi hook được biết là hoạt động — đồng
-thời giữ đường dẫn luôn cập nhật qua các lần nâng cấp plugin. Nó chỉ đụng
-vào đúng entry của chính nó và để yên phần còn lại của `settings.json`.
-Một khi upstream sửa lỗi đó, đây trở thành một bản trùng vô hại — tệ nhất
-là tốn thêm một lời gọi API.
+**Vì sao có thêm một hook `SessionStart`.** `hooks/self-register.mjs` là cách lách
+để tương thích với các bản Claude Code dính
+[anthropics/claude-code#36397](https://github.com/anthropics/claude-code/issues/36397),
+nơi hook `PreToolUse` của riêng plugin không chạy. Nó chạy ở mỗi `SessionStart`
+và ghi thẳng entry `PreToolUse` vào `~/.claude/settings.json` của bạn, đồng thời
+giữ đường dẫn luôn cập nhật qua các lần nâng cấp plugin. Nó chỉ đụng vào đúng entry
+của chính nó và để yên phần còn lại của `settings.json`. Claude Code 2.1.284 chạy
+**cả hai** đăng ký; khoá chống trùng trong hook chặn lần gọi thứ hai, nên vẫn chỉ có
+đúng một lời gọi provider và một đề xuất cho mỗi câu hỏi.
 
 **Context** là `state` có cấu trúc được mô tả ở mục "Jev được cho xem gì" trong
 [Các gate tự động](#3-các-gate-tự-động), không phải một cửa sổ lượt cố định:

@@ -133,6 +133,15 @@ ground that pick). There is no
 questions get advice too, because you are the one deciding. See
 [What you'll see](#what-youll-see) for the format.
 
+The advice line is `Jev đề xuất: <option> (<confidence>) — <grounded tag>`
+(`Jev nghiêng về:` when confidence is below the threshold). The one-line reason
+is a **grounded tag** the plugin generates itself — whether your own words or past choices back the pick —
+and never text copied from the agent's option description (the description stays
+visible on the option), so an agent cannot forge Jev's line. If the agent's own
+question, header, labels or descriptions already contain Jev's markers, the hook does not
+annotate at all: it falls back to the `message` channel and logs a
+`jev_marker_in_agent_text` diagnostic.
+
 **How the advice reaches you** is a setting, `ASK_JEV_ADVICE_CHANNEL`:
 
 | Channel | What happens |
@@ -146,6 +155,11 @@ to help you choose. Because the question text is what Claude Code keys the
 answer by, the answer Claude receives is keyed by the annotated question, so
 Claude sees Jev's line there too, labelled as Jev's. The [log](#usage-analytics)
 keeps the **original** question as the canonical text.
+
+`annotate` (`permissionDecision: "ask"` + `updatedInput`) is only verified in the
+default, `acceptEdits` and `plan` permission modes. In any other mode
+(`bypassPermissions`, `dontAsk`, …) the hook uses the `message` channel instead: a
+`systemMessage` only, no `permissionDecision`, no `updatedInput`.
 
 With several questions in one call each gets its own line, prefixed
 `[1/3]`, `[2/3]`, …; a `multiSelect` question is judged option by option and may
@@ -227,8 +241,8 @@ uploading, inviting, purchasing or deleting) goes through `AskUserQuestion`,
 where Jev only advises and you answer.
 
 A `SessionStart` hook injects a short rule saying exactly that. Two hooks run at
-every session start: `self-register.mjs`, which works around a Claude Code
-bug that stops plugin `PreToolUse` hooks from firing (see
+every session start: `self-register.mjs`, which is a compatibility
+workaround for Claude Code versions that did not fire plugin `PreToolUse` hooks (see
 [Implementation notes](#implementation-notes)), and `session-start.mjs`,
 which injects the rule itself. Both are silent if no API key is configured.
 
@@ -477,7 +491,7 @@ All optional — sensible defaults out of the box.
 | `AI_GATEWAY_API_KEY` | — | deprecated: legacy Vercel AI Gateway key, only a fallback |
 | `ASK_JEV_PROVIDER` | inferred from the key | `typesafe` or `vercel`; a `vck_` key infers `vercel`, anything else `typesafe` |
 | `ASK_JEV_ASK_THRESHOLD` | `0.8` | the "strong" line for `AskUserQuestion` advice (`Jev đề xuất` at or above it, `Jev nghiêng về` below) and the confidence at which Claude may act on a CLI answer |
-| `ASK_JEV_ADVICE_CHANNEL` | `annotate` | how `AskUserQuestion` advice is shown: `annotate` (appended to the question and recommended option via `updatedInput`, plus a `systemMessage`) or `message` (`systemMessage` only — visible after the dialog closes); anything else means `annotate` |
+| `ASK_JEV_ADVICE_CHANNEL` | `annotate` | how `AskUserQuestion` advice is shown: `annotate` (appended to the question and recommended option via `updatedInput`, plus a `systemMessage`) or `message` (`systemMessage` only — visible after the dialog closes); anything else means `annotate`. `annotate` automatically falls back to `message` outside the default/`acceptEdits`/`plan` permission modes, or when the agent's text contains Jev markers |
 | `ASK_JEV_REMIND` | (on) | set to `0` to stop the per-turn "ask Jev" reminder |
 | `ASK_JEV_GATES` | `permission,stop,bash,prompt` | comma list of enabled [automatic gates](#3-automatic-gates); set but empty (`ASK_JEV_GATES=`) disables all |
 | `ASK_JEV_STATE_CHARS` | `70000` | max characters of context sent to Jev per gate call — lower for faster/cheaper gates |
@@ -540,7 +554,7 @@ billing-note marker files (`.ask-jev-billing-<hash of session id>`, empty,
 | `question` / `question_text` | see the next table; always the **original** question, even when the annotated one was shown | 300 characters |
 | `options`, `chosen`, `recommended` | option labels, your selection, Jev's pick — each list entry capped separately, at most 50 entries | 300 each |
 | `advice_text` | the advice line you were shown | 300 |
-| `reason` | the matched criterion, or for advice the option's description + grounded tag | 160 |
+| `reason` | the matched criterion, or for advice the grounded tag | 160 |
 | `question_name` | the CLI question's name | 120 |
 | `warnings` | CLI validation flags (`class`, `path`, `message`), at most 20 | 300 per string |
 | `error` / `message` | the provider's error text, with keys, tokens and URL credentials redacted | 200 |
@@ -733,15 +747,16 @@ still parsed. For each question it writes an `outcome` row with `recommended`,
 `unparsed`, or `no_advice` when no advice had been shown). Annotated and
 original question text are both accepted as keys; the row stores the original.
 
-**Why there's a `SessionStart` hook too.** Claude Code currently doesn't run
-a plugin's own `PreToolUse` hooks at all
-([anthropics/claude-code#36397](https://github.com/anthropics/claude-code/issues/36397))
-— only `SessionStart` reliably fires from a plugin. So `hooks/self-register.mjs`
-runs on every `SessionStart` and writes the `PreToolUse` entry directly into
-your `~/.claude/settings.json`, where hooks are known to work — and keeps the
-path current across plugin updates. It only ever touches its own entry and
-leaves the rest of your `settings.json` alone. Once upstream fixes that bug,
-this becomes a harmless duplicate — worst case, one extra API call.
+**Why there's a `SessionStart` hook too.** `hooks/self-register.mjs` is a
+compatibility workaround for Claude Code versions affected by
+[anthropics/claude-code#36397](https://github.com/anthropics/claude-code/issues/36397),
+where a plugin's own `PreToolUse` hooks did not fire. It runs on every
+`SessionStart` and writes the `PreToolUse` entry directly into your
+`~/.claude/settings.json`, and keeps the path current across plugin updates. It
+only ever touches its own entry and leaves the rest of your `settings.json`
+alone. Claude Code 2.1.284 runs **both** registrations; a dedupe lock in the hook
+suppresses the second invocation, so there is still exactly one provider call
+and one advice per question.
 
 **Context** is the structured `state` described under "What Jev is shown" in
 [Automatic gates](#3-automatic-gates), not a fixed window of turns: capped at
