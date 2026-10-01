@@ -69,7 +69,7 @@ function stats(args) {
   const summary = computeStats(events);
 
   if (args.includes("--json")) {
-    process.stdout.write(JSON.stringify(summary) + "\n");
+    process.stdout.write(JSON.stringify(scrubStrings(summary)) + "\n");
     return;
   }
 
@@ -115,6 +115,14 @@ function stats(args) {
     const extra = label ? (d.confidence != null ? `${label} (${Number(d.confidence).toFixed(2)})` : label) : "";
     out(`  ${p(d.ts)}  ${p(d.outcome).padEnd(18)} ${q.padEnd(62)} ${extra}`);
   }
+}
+
+/** Mọi chuỗi (và khóa) lấy từ log phải qua printable() trước khi ra stdout — kể cả ở chế độ --json. */
+function scrubStrings(v) {
+  if (typeof v === "string") return printable(v);
+  if (Array.isArray(v)) return v.map(scrubStrings);
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [printable(k), scrubStrings(x)]));
+  return v;
 }
 
 async function main() {
