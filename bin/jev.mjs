@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { apiKey, askJev, logEvent, logFilePath, requestError, NOT_CHAT } from "../lib/jev.mjs";
 import { truncate } from "../lib/gate.mjs";
-import { applyStrictness, evidenceFindings, findingLine } from "../lib/cli-validate.mjs";
+import { evidenceFindings, findingLine } from "../lib/cli-validate.mjs";
 import { computeStats, filterSince, parseEvents, recentDecisions, sinceMsFromSpec } from "../lib/stats.mjs";
 
 function fail(message, code = 1) {
@@ -135,14 +135,14 @@ async function main() {
   const invalid = requestError(input);
   if (invalid) return fail(`${invalid}. ${NOT_CHAT}`);
 
-  const findings = applyStrictness(evidenceFindings(input));
+  const findings = evidenceFindings(input);
   const rejects = findings.filter((f) => f.severity === "reject");
   if (rejects.length) {
     for (const f of rejects) process.stderr.write(`${findingLine(f, "rejected")}\n`);
     process.exit(2);
   }
   for (const f of findings) process.stderr.write(`${findingLine(f, "warning")}\n`);
-  const warnings = findings.map(({ class: cls, path, message, downgraded }) => ({ class: cls, path, message: truncate(message, 300), ...(downgraded ? { downgraded: true } : {}) }));
+  const warnings = findings.map(({ class: cls, path, message }) => ({ class: cls, path, message: truncate(message, 300) }));
 
   const key = apiKey();
   if (!key) return fail("no API key (set TYPESAFE_API_KEY or ~/.claude/ask-jev.key)");

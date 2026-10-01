@@ -39,6 +39,9 @@ test("SessionStart and SKILL: internal-judgement scope and checkable-facts rule"
   }
   assert.match(skill, /## Never via the CLI/);
   assert.match(skill, /Exit 2/);
+  assert.match(skill, /no override/);
+  assert.match(sessionStart, /no override/);
+  assert.doesNotMatch(skill + sessionStart, /ASK_JEV_CLI_STRICT/);
 });
 
 test("release-please bumps the generated paseo version.mjs (generic updater + x-release-please-version marker)", () => {

@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { evidenceFindings, applyStrictness } from "../lib/cli-validate.mjs";
+import { evidenceFindings } from "../lib/cli-validate.mjs";
 import { cleanEnv } from "./testenv.mjs";
 
 const bool = (question) => ({ type: "boolean", instructions: { question }, criteria: { true: "yes, per the definition", false: "no, per the definition" } });
@@ -17,9 +17,9 @@ const lacks = (input, cls) => !evidenceFindings(input).some((f) => f.class === c
 
 const TASTE_Q = { q: choice("Which tone would the user like for the release note?", ["blunt", "warm"]) };
 
-test("agent_user_description: description keys and free text reject; user words and diffs pass", () => {
+test("agent_user_description: description keys reject, quoted/free state text is not scanned; user words and diffs pass", () => {
   assert.ok(has(req('{"user_style":"prefers terse"}', { q: bool("Is `ticket` urgent?") }), "agent_user_description", "reject"));
-  assert.ok(has(req('{"notes":"the user probably likes dark mode"}', { q: bool("Is `ticket` urgent?") }), "agent_user_description", "reject"));
+  assert.ok(lacks(req('{"notes":"the user probably likes dark mode"}', { q: bool("Is `ticket` urgent?") }), "agent_user_description"));
   assert.ok(lacks(req('{"user_messages":["I prefer terse"]}', { q: bool("Is `ticket` urgent?") }), "agent_user_description"));
   assert.ok(lacks(req('{"diff":"- the user likes dark mode\\n+ the user wants light mode"}', { q: bool("Is `diff` a UI change?") }), "agent_user_description"));
   assert.ok(lacks(req('{"ticket":"Customers say they want a refund and he likes the old plan"}', { q: bool("Is `ticket` a refund request?") }), "agent_user_description"));
@@ -99,17 +99,36 @@ test("a valid agent-internal request produces no findings", () => {
   assert.deepEqual(evidenceFindings(input), []);
 });
 
-test("ASK_JEV_CLI_STRICT=0 downgrades rejects to flagged-with-downgraded; default leaves them", () => {
-  const input = req('{"diff":"x"}', { q: bool("Should I merge now?") });
-  const findings = evidenceFindings(input);
-  assert.ok(applyStrictness(findings).some((f) => f.severity === "reject"));
-  process.env.ASK_JEV_CLI_STRICT = "0";
-  try {
-    const down = applyStrictness(findings);
-    assert.ok(down.every((f) => f.severity === "flag") && down.some((f) => f.downgraded));
-  } finally {
-    delete process.env.ASK_JEV_CLI_STRICT;
-  }
+const PEER_BRIEF = "Goal: add a --dry-run flag to the sync script. Steps: push the branch to origin when green, open a PR against main, and once approved merge and deploy to staging. The user wants a short summary, and the user probably likes terse logs. Also delete the temp dir under /tmp/sync-work and send nothing else. Do not touch UserSvc. Prefer the existing naming style.";
+const PEER_REPORT = "Done: added --dry-run. I pushed the branch to origin and opened a PR; the user asked me to merge it, so I merged and deployed. I deleted the temp dir. Tests: 12 pass. The user prefers short output so I kept it brief.";
+
+test("Lead callers: tier routing request with an action-heavy Peer brief in state is not rejected or flagged", () => {
+  const tier = { type: "choice", instructions: { question: "Which Peer tier does `task` belong to?", focus: "Judge the nature of the work, not its size or how many files it touches." }, criteria: {
+    cheap_peer: { what: "Mechanical, well-specified edits with no design judgement", not_for: "peer, expensive_peer", examples: ["rename UserSvc to UserService across the repo"] },
+    peer: { what: "Feature work with moderate judgement inside a known design", not_for: "cheap_peer, expensive_peer", examples: ["add rate limiting to POST /login"] },
+    expensive_peer: { what: "Cross-cutting design where mistakes break invariants", not_for: "cheap_peer, peer", examples: ["redesign the auth flow to support SSO without breaking existing sessions"] },
+  } };
+  const input = { state: { task: PEER_BRIEF }, questions: { tier } };
+  assert.deepEqual(evidenceFindings(input), []);
+});
+
+test("Lead callers: capability_failure judging a Peer's report against its spec is not self_judgement and is not rejected", () => {
+  const capability = { type: "boolean", instructions: "Does `report` show a capability failure given `spec`?", criteria: {
+    true: "The Peer had everything it needed and still produced wrong reasoning, broke stated invariants, or lost track across files — the spec was sufficient",
+    false: "The output is incomplete or wrong because of missing context, vague acceptance criteria, wrong file paths, ambiguous requirements, a permission block, or a task too large — the spec, not the model, is at fault",
+  } };
+  const input = { state: { spec: PEER_BRIEF, report: PEER_REPORT }, questions: { capability_failure: capability } };
+  assert.ok(!classes(input).some((c) => c.endsWith(":reject")), classes(input).join());
+  assert.ok(lacks(input, "self_judgement"));
+  assert.ok(lacks(input, "user_decision_action"));
+  assert.ok(lacks(input, "taste_without_user_words"));
+});
+
+test("actions/taste in the question or option labels still reject even when a Peer brief is in state (scope is what Jev is asked to decide)", () => {
+  const withBrief = (q) => ({ state: { task: PEER_BRIEF }, questions: { q } });
+  assert.ok(has(withBrief(bool("Should I push the branch to origin?")), "user_decision_action", "reject"));
+  assert.ok(has(withBrief(choice("What next?", ["merge_now", "wait"])), "user_decision_action", "reject"));
+  assert.ok(has(withBrief(choice("Which wording would the user like?", ["terse", "verbose"])), "taste_without_user_words", "reject"));
 });
 
 const JEV = new URL("../bin/jev.mjs", import.meta.url).pathname;
@@ -155,7 +174,7 @@ test("CLI: reject → exit 2, clear stderr, zero provider calls, no decision row
   });
 });
 
-test("CLI: flag → proceeds, stderr warning, warnings on the logged row; STRICT=0 downgrade logs downgraded", async () => {
+test("CLI: flag → proceeds, stderr warning, warnings on the logged row; ASK_JEV_CLI_STRICT=0 is no longer an override", async () => {
   await withStub(async (url, hits) => {
     const log = join(mkdtempSync(join(tmpdir(), "cliv-")), "log");
     const r = await runCli(req("{}", { q: bool("Is CI green on this PR?") }), { ASK_JEV_API_URL: url, ASK_JEV_LOG_FILE: log });
@@ -166,10 +185,10 @@ test("CLI: flag → proceeds, stderr warning, warnings on the logged row; STRICT
     const row = readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l)).find((e) => e.kind === "decision");
     assert.equal(row.warnings[0].class, "checkable_fact");
 
-    const down = await runCli(req('{"diff":"x"}', { q: bool("Should I merge now?") }), { ASK_JEV_API_URL: url, ASK_JEV_LOG_FILE: log, ASK_JEV_CLI_STRICT: "0" });
-    assert.equal(down.code, 0);
-    assert.match(down.stderr, /warning \[user_decision_action\]/);
-    assert.equal(hits(), 2);
+    const stillRejected = await runCli(req('{"diff":"x"}', { q: bool("Should I merge now?") }), { ASK_JEV_API_URL: url, ASK_JEV_LOG_FILE: log, ASK_JEV_CLI_STRICT: "0" });
+    assert.equal(stillRejected.code, 2);
+    assert.match(stillRejected.stderr, /rejected \[user_decision_action\]/);
+    assert.equal(hits(), 1);
   });
 });
 
