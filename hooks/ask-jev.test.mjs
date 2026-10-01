@@ -884,9 +884,9 @@ test("updatedInput is an ALLOWLIST: hostile picked/answer/selection/nested extra
   assert.doesNotMatch(r.stdout, /picked|selection|nested|"extra"|metadata/);
 });
 
-test("permission_mode: annotate only in default/acceptEdits/plan/absent; any other mode → systemMessage only (no permissionDecision, no updatedInput)", async () => {
+test("permission_mode: annotate only in default/acceptEdits/plan/bypassPermissions/absent; any other mode → systemMessage only (no permissionDecision, no updatedInput)", async () => {
   const stub1 = await provider500Stub(() => adviceAnswers(0.9));
-  for (const [mode, annotates] of [[undefined, true], ["default", true], ["acceptEdits", true], ["plan", true], ["bypassPermissions", false], ["dontAsk", false], ["auto", false], ["somethingNew", false]]) {
+  for (const [mode, annotates] of [[undefined, true], ["default", true], ["acceptEdits", true], ["plan", true], ["bypassPermissions", true], ["dontAsk", false], ["auto", false], ["somethingNew", false]]) {
     const r = await runAdvisory(hookInput([{ question: `m-${mode}?`, options: advOpts }], mode === undefined ? {} : { permission_mode: mode }), stub1.url);
     assertNeverAnswers(r.stdout);
     assert.match(r.json.systemMessage, /^Jev đề xuất: "A" \(#1\) \(0\.90\)/, String(mode));
@@ -896,16 +896,19 @@ test("permission_mode: annotate only in default/acceptEdits/plan/absent; any oth
   stub1.close();
 });
 
-test("permission_mode fallback also covers failure notes (bypassPermissions → systemMessage only)", async () => {
+test("permission_mode fallback also covers failure notes (dontAsk → systemMessage only; bypassPermissions annotates the note)", async () => {
   const stub1 = await provider500Stub(() => ({ status: 401 }));
-  const r = await runAdvisory(hookInput([{ question: "q?", options: advOpts }], { permission_mode: "bypassPermissions" }), stub1.url);
+  const r = await runAdvisory(hookInput([{ question: "q?", options: advOpts }], { permission_mode: "dontAsk" }), stub1.url);
+  const bypass = await runAdvisory(hookInput([{ question: "q?", options: advOpts }], { permission_mode: "bypassPermissions" }), stub1.url);
   stub1.close();
   assert.deepEqual(Object.keys(r.json), ["systemMessage"]);
+  assert.equal(bypass.json.hookSpecificOutput.permissionDecision, "ask");
+  assert.match(bypass.json.hookSpecificOutput.updatedInput.questions[0].question, /^q\?\n\nJev: không có đề xuất/);
 });
 
-test("ASK_JEV_FORCE_ANNOTATE=1 (test-only) annotates regardless of permission_mode", async () => {
+test("ASK_JEV_FORCE_ANNOTATE=1 (test-only) annotates regardless of permission_mode (dontAsk)", async () => {
   const stub1 = await provider500Stub(() => adviceAnswers(0.9));
-  const r = await runAdvisory(hookInput([{ question: "q?", options: advOpts }], { permission_mode: "bypassPermissions" }), stub1.url, { env: { ASK_JEV_FORCE_ANNOTATE: "1" } });
+  const r = await runAdvisory(hookInput([{ question: "q?", options: advOpts }], { permission_mode: "dontAsk" }), stub1.url, { env: { ASK_JEV_FORCE_ANNOTATE: "1" } });
   stub1.close();
   assertNeverAnswers(r.stdout);
   assert.equal(r.json.hookSpecificOutput.permissionDecision, "ask");

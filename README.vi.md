@@ -161,8 +161,9 @@ câu trả lời Claude nhận được mang khoá là câu hỏi đã chú thí
 thấy dòng của Jev ở đó, được gắn nhãn là của Jev. [Log](#usage-analytics) giữ
 câu hỏi **gốc** làm văn bản chuẩn.
 
-`annotate` (`permissionDecision: "ask"` + `updatedInput`) chỉ được xác minh ở các chế độ quyền
-mặc định, `acceptEdits` và `plan`. Ở chế độ khác (`bypassPermissions`, `dontAsk`, …) hook dùng
+`annotate` (`permissionDecision: "ask"` + `updatedInput`) đã được xác minh trong một phiên Claude Code
+2.1.284 thật ở chế độ mặc định và `bypassPermissions` (hộp thoại mở với câu hỏi đã chú thích, chờ bạn,
+rồi trả đúng lựa chọn của bạn); `acceptEdits` và `plan` cũng dùng nó. Ở chế độ khác (`dontAsk`, giá trị lạ) hook dùng
 kênh `message`: chỉ một `systemMessage`, không có `permissionDecision`, không có `updatedInput`.
 
 Với nhiều câu hỏi trong một lời gọi, mỗi câu có một dòng riêng, tiền tố
@@ -495,7 +496,7 @@ Tất cả đều tuỳ chọn — mặc định đã hợp lý sẵn.
 | `AI_GATEWAY_API_KEY` | — | deprecated: Vercel AI Gateway key cũ, chỉ là fallback |
 | `ASK_JEV_PROVIDER` | suy từ key | `typesafe` hoặc `vercel`; key `vck_` suy ra `vercel`, còn lại `typesafe` |
 | `ASK_JEV_ASK_THRESHOLD` | `0.8` | ranh giới "mạnh" cho đề xuất `AskUserQuestion` (`Jev đề xuất` từ ngưỡng này trở lên, `Jev nghiêng về` bên dưới) và độ tin mà Claude có thể hành động theo đáp án CLI |
-| `ASK_JEV_ADVICE_CHANNEL` | `annotate` | cách hiển thị đề xuất `AskUserQuestion`: `annotate` (nối vào câu hỏi và option được đề xuất qua `updatedInput`, kèm một `systemMessage`) hoặc `message` (chỉ `systemMessage` — chỉ thấy sau khi hộp thoại đóng); giá trị khác đều là `annotate`. `annotate` tự động quay về `message` ngoài các chế độ quyền mặc định/`acceptEdits`/`plan`, hoặc khi văn bản của agent chứa dấu hiệu của Jev |
+| `ASK_JEV_ADVICE_CHANNEL` | `annotate` | cách hiển thị đề xuất `AskUserQuestion`: `annotate` (nối vào câu hỏi và option được đề xuất qua `updatedInput`, kèm một `systemMessage`) hoặc `message` (chỉ `systemMessage` — chỉ thấy sau khi hộp thoại đóng); giá trị khác đều là `annotate`. `annotate` tự động quay về `message` ngoài các chế độ quyền mặc định/`acceptEdits`/`plan`/`bypassPermissions`, hoặc khi văn bản của agent chứa dấu hiệu của Jev |
 | `ASK_JEV_REMIND` | (bật) | đặt `0` để tắt lời nhắc "ask Jev" mỗi lượt |
 | `ASK_JEV_GATES` | `permission,stop,bash,prompt` | danh sách các [gate tự động](#3-các-gate-tự-động) đang bật, phân tách bởi dấu phẩy; đặt nhưng để trống (`ASK_JEV_GATES=`) tắt cả bốn |
 | `ASK_JEV_STATE_CHARS` | `70000` | số ký tự ngữ cảnh tối đa gửi cho Jev mỗi lần gọi gate — giảm xuống để gate nhanh/rẻ hơn |

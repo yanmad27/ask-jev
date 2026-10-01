@@ -13,7 +13,7 @@
  *                         (S0, Claude Code 2.1.284): systemMessage chỉ hiện trong transcript sau khi đã trả lời.
  *   message             — chỉ `{"systemMessage": ...}` ở top-level; câu hỏi đi nguyên vẹn.
  *
- * annotate chỉ chạy ở permission_mode default/acceptEdits/plan (hoặc không có); chế độ khác, hoặc văn bản agent chứa dấu hiệu của Jev,
+ * annotate chỉ chạy ở permission_mode default/acceptEdits/plan/bypassPermissions (hoặc không có); chế độ khác, hoặc văn bản agent chứa dấu hiệu của Jev,
  * thì dùng message. ASK_JEV_FORCE_ANNOTATE=1 là công tắc CHỈ DÙNG ĐỂ KIỂM THỬ (annotate bất kể permission_mode; không có trong README).
  *
  * Im lặng (không note) khi: không có API key, chưa có ngữ cảnh, câu hỏi một option, option thiếu mô tả —
@@ -131,10 +131,11 @@ function annotateQuestions(questions, advices, texts) {
   };
 }
 
-// Kênh annotate (ask + updatedInput) chỉ được xác minh ở chế độ quyền mặc định; chế độ khác (bypassPermissions, dontAsk, …) dùng message.
+// Kênh annotate (ask + updatedInput) đã được xác minh trong phiên Claude Code 2.1.284 thật ở chế độ default và bypassPermissions (hộp
+// thoại mở với câu hỏi đã chú thích, chờ người, trả đúng lựa chọn); dontAsk và chế độ lạ chưa xác minh nên dùng message.
 // ASK_JEV_FORCE_ANNOTATE=1 là công tắc CHỈ DÙNG ĐỂ KIỂM THỬ (không có trong README): annotate bất kể permission_mode, để chạy thật
-// xem ask+updatedInput có hiện hộp thoại ở bypassPermissions không.
-const ANNOTATE_MODES = new Set(["default", "acceptEdits", "plan"]);
+// xem ask+updatedInput có hiện hộp thoại ở các chế độ chưa xác minh (vd dontAsk) không.
+const ANNOTATE_MODES = new Set(["default", "acceptEdits", "plan", "bypassPermissions"]);
 // So khớp trên dạng đã chuẩn hoá: NFKC, bỏ zero-width/bidi/format, mọi khoảng trắng (cả NBSP) thành một dấu cách, hạ chữ.
 // Giới hạn đã biết: homoglyph ngoài NFKC (vd Cyrillic "е" thay "e") không bị bắt — đây là best effort.
 const FORMAT_CHARS = /[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;

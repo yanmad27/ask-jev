@@ -161,9 +161,11 @@ answer by, the answer Claude receives is keyed by the annotated question, so
 Claude sees Jev's line there too, labelled as Jev's. The [log](#usage-analytics)
 keeps the **original** question as the canonical text.
 
-`annotate` (`permissionDecision: "ask"` + `updatedInput`) is only verified in the
-default, `acceptEdits` and `plan` permission modes. In any other mode
-(`bypassPermissions`, `dontAsk`, …) the hook uses the `message` channel instead: a
+`annotate` (`permissionDecision: "ask"` + `updatedInput`) was verified in a real
+Claude Code 2.1.284 session in the default and `bypassPermissions` modes (the
+dialog opened with the annotated question, waited for you, and returned your
+pick); `acceptEdits` and `plan` use it too. In any other mode
+(`dontAsk`, anything unrecognised) the hook uses the `message` channel instead: a
 `systemMessage` only, no `permissionDecision`, no `updatedInput`.
 
 With several questions in one call each gets its own line, prefixed
@@ -496,7 +498,7 @@ All optional — sensible defaults out of the box.
 | `AI_GATEWAY_API_KEY` | — | deprecated: legacy Vercel AI Gateway key, only a fallback |
 | `ASK_JEV_PROVIDER` | inferred from the key | `typesafe` or `vercel`; a `vck_` key infers `vercel`, anything else `typesafe` |
 | `ASK_JEV_ASK_THRESHOLD` | `0.8` | the "strong" line for `AskUserQuestion` advice (`Jev đề xuất` at or above it, `Jev nghiêng về` below) and the confidence at which Claude may act on a CLI answer |
-| `ASK_JEV_ADVICE_CHANNEL` | `annotate` | how `AskUserQuestion` advice is shown: `annotate` (appended to the question and recommended option via `updatedInput`, plus a `systemMessage`) or `message` (`systemMessage` only — visible after the dialog closes); anything else means `annotate`. `annotate` automatically falls back to `message` outside the default/`acceptEdits`/`plan` permission modes, or when the agent's text contains Jev markers |
+| `ASK_JEV_ADVICE_CHANNEL` | `annotate` | how `AskUserQuestion` advice is shown: `annotate` (appended to the question and recommended option via `updatedInput`, plus a `systemMessage`) or `message` (`systemMessage` only — visible after the dialog closes); anything else means `annotate`. `annotate` automatically falls back to `message` outside the default/`acceptEdits`/`plan`/`bypassPermissions` permission modes, or when the agent's text contains Jev markers |
 | `ASK_JEV_REMIND` | (on) | set to `0` to stop the per-turn "ask Jev" reminder |
 | `ASK_JEV_GATES` | `permission,stop,bash,prompt` | comma list of enabled [automatic gates](#3-automatic-gates); set but empty (`ASK_JEV_GATES=`) disables all |
 | `ASK_JEV_STATE_CHARS` | `70000` | max characters of context sent to Jev per gate call — lower for faster/cheaper gates |
