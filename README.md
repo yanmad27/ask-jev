@@ -19,7 +19,9 @@ answer is often already sitting in the conversation. ask-jev hands that
 question to Jev — a small, fast model that judges instead of chats, returning a
 probability instead of prose — and shows you Jev's recommendation next to the
 question. **Jev advises; you decide.** Jev never answers an `AskUserQuestion`
-for you and never blocks it: the question always reaches you, unchanged.
+for you and never blocks it: the question always reaches you, with its options
+and their labels intact. By default Jev's line is appended to the question text
+(see [the channel setting](#1-advice-on-askuserquestion)).
 
 ```
 "Which date library should we use?"        → Jev đề xuất: date-fns (1.00) — already in package.json
@@ -79,13 +81,15 @@ Jev nghiêng về: Teal (0.55) — A calm blue-green accent [no direct statement
   (`grounded in your messages/past choices`) or it is a guess
   (`no direct statement from you — a guess`). It is capped at 160 characters.
 - **If Jev fails** (provider error, timeout, out of credits) the question
-  reaches you unchanged, with a note: `Jev: không có đề xuất (lỗi <status>) — bạn tự quyết`
+  still reaches you, with a note appended the same way as advice: `Jev: không có đề xuất (lỗi <status>) — bạn tự quyết`
   ("no advice — you decide"). A billing / HTTP 402 failure says
   `hết credits — credits exhausted` once per session and a generic note after.
 - **No API key** → completely silent.
 
-The question is never answered or denied. Only the opt-in `annotate` channel
-(below) touches its text, to add the advice. The examples above are illustrative.
+The question is never answered or denied. In the default `annotate` channel
+(below) its text carries Jev's line (or the failure note) and the recommended
+option's description gets ` (Jev đề xuất)`; option labels are never changed.
+The examples above are illustrative.
 
 ## How it works
 
@@ -133,8 +137,15 @@ questions get advice too, because you are the one deciding. See
 
 | Channel | What happens |
 |---|---|
-| `message` (default) | One `systemMessage` line per question. The question itself is passed through untouched |
-| `annotate` | The hook returns `permissionDecision: "ask"` with an `updatedInput`: the advice line is appended to the question and the recommended option's description gets ` (Jev đề xuất)`. It still asks you — `updatedInput` carries no `answers` |
+| `annotate` (default) | The hook returns `permissionDecision: "ask"` with an `updatedInput`: the advice line (or, when Jev failed, the failure note) is appended to the question text and the recommended option's description gets ` (Jev đề xuất)`; option labels are unchanged. It also emits the same text as a top-level `systemMessage`. It still asks you — the hook drops any answer-like key (`answers`, `annotations`, …) from `updatedInput`, so it can never pre-fill a reply |
+| `message` (opt-in) | Only a top-level `systemMessage` line per question; the question itself is passed through untouched |
+
+`annotate` is the default because, in Claude Code 2.1.284, a `systemMessage`
+on its own only shows up in the transcript *after* the dialog closes — too late
+to help you choose. Because the question text is what Claude Code keys the
+answer by, the answer Claude receives is keyed by the annotated question, so
+Claude sees Jev's line there too, labelled as Jev's. The [log](#usage-analytics)
+keeps the **original** question as the canonical text.
 
 With several questions in one call each gets its own line, prefixed
 `[1/3]`, `[2/3]`, …; a `multiSelect` question is judged option by option and may
@@ -201,7 +212,7 @@ the least decisive option's.
 | no API key | nothing at all |
 | no usable context in the transcript | nothing (logged `advice_unavailable: no_context`) |
 | an option has no description, or only one option | nothing (logged `missing_definition` / `single_option`) |
-| Jev errors or takes over 8s | the question unchanged plus `Jev: không có đề xuất (…) — bạn tự quyết` |
+| Jev errors or takes over 8s | the question plus `Jev: không có đề xuất (…) — bạn tự quyết` (appended to the question in `annotate`, a `systemMessage` in `message`) |
 | running inside Paseo | the Claude Code hook stands down; the Paseo plugin (if installed) advises instead |
 
 </details>
@@ -466,7 +477,7 @@ All optional — sensible defaults out of the box.
 | `AI_GATEWAY_API_KEY` | — | deprecated: legacy Vercel AI Gateway key, only a fallback |
 | `ASK_JEV_PROVIDER` | inferred from the key | `typesafe` or `vercel`; a `vck_` key infers `vercel`, anything else `typesafe` |
 | `ASK_JEV_ASK_THRESHOLD` | `0.8` | the "strong" line for `AskUserQuestion` advice (`Jev đề xuất` at or above it, `Jev nghiêng về` below) and the confidence at which Claude may act on a CLI answer |
-| `ASK_JEV_ADVICE_CHANNEL` | `message` | how `AskUserQuestion` advice is shown: `message` (top-level `systemMessage`) or `annotate` (also appended to the question via `updatedInput`); anything else means `message` |
+| `ASK_JEV_ADVICE_CHANNEL` | `annotate` | how `AskUserQuestion` advice is shown: `annotate` (appended to the question and recommended option via `updatedInput`, plus a `systemMessage`) or `message` (`systemMessage` only — visible after the dialog closes); anything else means `annotate` |
 | `ASK_JEV_REMIND` | (on) | set to `0` to stop the per-turn "ask Jev" reminder |
 | `ASK_JEV_GATES` | `permission,stop,bash,prompt` | comma list of enabled [automatic gates](#3-automatic-gates); set but empty (`ASK_JEV_GATES=`) disables all |
 | `ASK_JEV_STATE_CHARS` | `70000` | max characters of context sent to Jev per gate call — lower for faster/cheaper gates |
@@ -494,6 +505,9 @@ unique `event_id`.
 **The log is private, but it is not free of your words.** It does not hold the
 `state` sent to Jev or the session transcript, but it does hold short excerpts
 of what you and Claude said — listed below. Treat it like shell history.
+Control, zero-width and bidirectional-override characters are scrubbed from
+every string before a row is written, and `jev stats` strips them again when it
+prints (so old rows and hostile text can't inject terminal escapes).
 
 <details>
 <summary>What the log stores, field by field</summary>
@@ -523,7 +537,7 @@ billing-note marker files (`.ask-jev-billing-<hash of session id>`, empty,
 
 | Field | Holds | Cap |
 |---|---|---|
-| `question` / `question_text` | see the next table | 300 characters |
+| `question` / `question_text` | see the next table; always the **original** question, even when the annotated one was shown | 300 characters |
 | `options`, `chosen`, `recommended` | option labels, your selection, Jev's pick — each list entry capped separately, at most 50 entries | 300 each |
 | `advice_text` | the advice line you were shown | 300 |
 | `reason` | the matched criterion, or for advice the option's description + grounded tag | 160 |
@@ -705,10 +719,19 @@ Jev API directly. Clone it and it runs — no `npm install`, no
 
 **The `AskUserQuestion` hook only adds information.** It never returns
 `permissionDecision: "deny"` or `"allow"`, and never puts `answers` in
-`updatedInput`. The default `message` channel emits just a top-level
-`systemMessage`; the opt-in `annotate` channel also returns
-`permissionDecision: "ask"` with the annotated questions, which still asks you.
-Any internal error leaves the question exactly as Claude wrote it.
+`updatedInput`. The default `annotate` channel returns
+`permissionDecision: "ask"` with the annotated questions (which still asks
+you) plus a top-level `systemMessage`; the opt-in `message` channel emits only
+the `systemMessage`. Any internal error leaves the question exactly as Claude
+wrote it.
+
+**What the `PostToolUse` hook reads back.** Claude Code (2.1.284+) hands it an
+object `tool_response` of the form `{questions, answers, annotations}`, with
+`answers` keyed by question text; older builds used a text response, which is
+still parsed. For each question it writes an `outcome` row with `recommended`,
+`chosen` and `agreement` (`agree` / `disagree` / `partial` / `free_text` /
+`unparsed`, or `no_advice` when no advice had been shown). Annotated and
+original question text are both accepted as keys; the row stores the original.
 
 **Why there's a `SessionStart` hook too.** Claude Code currently doesn't run
 a plugin's own `PreToolUse` hooks at all
@@ -720,8 +743,12 @@ path current across plugin updates. It only ever touches its own entry and
 leaves the rest of your `settings.json` alone. Once upstream fixes that bug,
 this becomes a harmless duplicate — worst case, one extra API call.
 
-**Context** comes from the last 12 turns of the session transcript (subagent
-and machine-generated turns dropped), trimmed to 6000 characters. Each
-question costs roughly $0.00002 and takes about 0.7s.
+**Context** is the structured `state` described under "What Jev is shown" in
+[Automatic gates](#3-automatic-gates), not a fixed window of turns: capped at
+70,000 characters by default (`ASK_JEV_STATE_CHARS`), built from the last 5
+messages you typed (≤3,000 characters each), conversation turns (≤4,000 each,
+subagent and machine-generated turns dropped), CLAUDE.md and memory, the git
+diff, and your past choices across projects. The transcript is read from its
+last 2 MB only.
 
 </details>

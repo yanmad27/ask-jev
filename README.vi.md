@@ -19,7 +19,9 @@ nằm sẵn trong cuộc hội thoại. ask-jev đưa câu hỏi đó cho Jev �
 nhanh, chuyên phán đoán thay vì trò chuyện, trả về xác suất thay vì chữ — rồi
 hiện đề xuất của Jev ngay cạnh câu hỏi. **Jev đề xuất; bạn quyết định.** Jev
 không bao giờ trả lời `AskUserQuestion` thay bạn và không bao giờ chặn nó: câu
-hỏi luôn tới tay bạn, nguyên vẹn.
+hỏi luôn tới tay bạn, với các option và nhãn của chúng còn nguyên. Mặc định
+dòng của Jev được nối vào nội dung câu hỏi (xem
+[cài đặt kênh](#1-đề-xuất-cho-askuserquestion)).
 
 ```
 "Dùng thư viện nào để parse ngày?"     → Jev đề xuất: date-fns (1.00) — đã có trong package.json
@@ -78,15 +80,16 @@ Jev nghiêng về: Teal (0.55) — A calm blue-green accent [no direct statement
   một tag cho biết lời của bạn hoặc lựa chọn trong quá khứ có làm căn cứ cho
   pick hay không (`grounded in your messages/past choices`) hay chỉ là đoán
   (`no direct statement from you — a guess`). Tối đa 160 ký tự.
-- **Nếu Jev lỗi** (lỗi provider, timeout, hết credits) câu hỏi tới tay bạn
-  nguyên vẹn, kèm một ghi chú: `Jev: không có đề xuất (lỗi <status>) — bạn tự quyết`.
+- **Nếu Jev lỗi** (lỗi provider, timeout, hết credits) câu hỏi vẫn
+  tới tay bạn, kèm một ghi chú được nối vào giống như đề xuất: `Jev: không có đề xuất (lỗi <status>) — bạn tự quyết`.
   Lỗi billing / HTTP 402 nói `hết credits — credits exhausted` đúng một lần
   mỗi session, sau đó là ghi chú chung.
 - **Chưa đặt API key** → hoàn toàn im lặng.
 
-Câu hỏi không bao giờ bị trả lời hay từ chối. Chỉ kênh `annotate` (tuỳ chọn,
-bên dưới) mới đụng tới nội dung câu hỏi, để thêm đề xuất vào đó. Các ví dụ
-ở trên chỉ mang tính minh hoạ.
+Câu hỏi không bao giờ bị trả lời hay từ chối. Ở kênh `annotate` mặc định (bên
+dưới), nội dung câu hỏi mang dòng của Jev (hoặc ghi chú lỗi) và mô tả của
+option được đề xuất có thêm ` (Jev đề xuất)`; nhãn option không bao giờ bị đổi.
+Các ví dụ ở trên chỉ mang tính minh hoạ.
 
 ## Cách hoạt động
 
@@ -136,8 +139,15 @@ biết định dạng.
 
 | Kênh | Điều gì xảy ra |
 |---|---|
-| `message` (mặc định) | Một dòng `systemMessage` cho mỗi câu hỏi. Bản thân câu hỏi đi qua nguyên vẹn |
-| `annotate` | Hook trả về `permissionDecision: "ask"` kèm `updatedInput`: dòng đề xuất được nối vào câu hỏi và mô tả của option được đề xuất thêm ` (Jev đề xuất)`. Nó vẫn hỏi bạn — `updatedInput` không mang `answers` |
+| `annotate` (mặc định) | Hook trả về `permissionDecision: "ask"` kèm `updatedInput`: dòng đề xuất (hoặc, khi Jev lỗi, ghi chú lỗi) được nối vào nội dung câu hỏi và mô tả của option được đề xuất thêm ` (Jev đề xuất)`; nhãn option không đổi. Nó cũng phát cùng nội dung đó dưới dạng `systemMessage` cấp cao nhất. Nó vẫn hỏi bạn — hook bỏ mọi khoá giống "câu trả lời" (`answers`, `annotations`, …) khỏi `updatedInput`, nên không bao giờ điền sẵn đáp án được |
+| `message` (tuỳ chọn) | Chỉ một dòng `systemMessage` cấp cao nhất cho mỗi câu hỏi; bản thân câu hỏi đi qua nguyên vẹn |
+
+`annotate` là mặc định vì ở Claude Code 2.1.284, một `systemMessage` đứng một
+mình chỉ hiện trong transcript *sau khi* hộp thoại đã đóng — quá muộn để giúp
+bạn chọn. Vì nội dung câu hỏi là thứ Claude Code dùng làm khoá của câu trả lời,
+câu trả lời Claude nhận được mang khoá là câu hỏi đã chú thích, nên Claude cũng
+thấy dòng của Jev ở đó, được gắn nhãn là của Jev. [Log](#usage-analytics) giữ
+câu hỏi **gốc** làm văn bản chuẩn.
 
 Với nhiều câu hỏi trong một lời gọi, mỗi câu có một dòng riêng, tiền tố
 `[1/3]`, `[2/3]`, …; câu hỏi `multiSelect` được phán đoán từng option và có
@@ -203,7 +213,7 @@ xuất là độ tin của option kém dứt khoát nhất.
 | chưa đặt API key | không có gì cả |
 | không có ngữ cảnh dùng được trong transcript | không có gì (log `advice_unavailable: no_context`) |
 | một option thiếu mô tả, hoặc chỉ có một option | không có gì (log `missing_definition` / `single_option`) |
-| Jev lỗi hoặc mất hơn 8s | câu hỏi nguyên vẹn kèm `Jev: không có đề xuất (…) — bạn tự quyết` |
+| Jev lỗi hoặc mất hơn 8s | câu hỏi kèm `Jev: không có đề xuất (…) — bạn tự quyết` (nối vào câu hỏi ở `annotate`, là một `systemMessage` ở `message`) |
 | chạy trong Paseo | hook Claude Code đứng im; Paseo plugin (nếu có cài) đề xuất thay |
 
 </details>
@@ -469,7 +479,7 @@ Tất cả đều tuỳ chọn — mặc định đã hợp lý sẵn.
 | `AI_GATEWAY_API_KEY` | — | deprecated: Vercel AI Gateway key cũ, chỉ là fallback |
 | `ASK_JEV_PROVIDER` | suy từ key | `typesafe` hoặc `vercel`; key `vck_` suy ra `vercel`, còn lại `typesafe` |
 | `ASK_JEV_ASK_THRESHOLD` | `0.8` | ranh giới "mạnh" cho đề xuất `AskUserQuestion` (`Jev đề xuất` từ ngưỡng này trở lên, `Jev nghiêng về` bên dưới) và độ tin mà Claude có thể hành động theo đáp án CLI |
-| `ASK_JEV_ADVICE_CHANNEL` | `message` | cách hiển thị đề xuất `AskUserQuestion`: `message` (`systemMessage` cấp cao nhất) hoặc `annotate` (nối thêm vào câu hỏi qua `updatedInput`); giá trị khác đều là `message` |
+| `ASK_JEV_ADVICE_CHANNEL` | `annotate` | cách hiển thị đề xuất `AskUserQuestion`: `annotate` (nối vào câu hỏi và option được đề xuất qua `updatedInput`, kèm một `systemMessage`) hoặc `message` (chỉ `systemMessage` — chỉ thấy sau khi hộp thoại đóng); giá trị khác đều là `annotate` |
 | `ASK_JEV_REMIND` | (bật) | đặt `0` để tắt lời nhắc "ask Jev" mỗi lượt |
 | `ASK_JEV_GATES` | `permission,stop,bash,prompt` | danh sách các [gate tự động](#3-các-gate-tự-động) đang bật, phân tách bởi dấu phẩy; đặt nhưng để trống (`ASK_JEV_GATES=`) tắt cả bốn |
 | `ASK_JEV_STATE_CHARS` | `70000` | số ký tự ngữ cảnh tối đa gửi cho Jev mỗi lần gọi gate — giảm xuống để gate nhanh/rẻ hơn |
@@ -497,7 +507,9 @@ dòng đều có một `event_id` duy nhất.
 **Log là riêng tư, nhưng không hề không có lời của bạn.** Nó không chứa
 `state` gửi cho Jev hay transcript của session, nhưng có chứa những đoạn trích
 ngắn về điều bạn và Claude đã nói — liệt kê bên dưới. Hãy coi nó như lịch sử
-shell.
+shell. Ký tự điều khiển, zero-width và bidi override bị lọc khỏi mọi chuỗi
+trước khi ghi một dòng, và `jev stats` lọc lại lần nữa khi in (để dòng cũ hay
+văn bản độc hại không chèn được escape vào terminal).
 
 <details>
 <summary>Log lưu những gì, từng trường một</summary>
@@ -527,7 +539,7 @@ agent Paseo, nếu có).
 
 | Trường | Chứa | Giới hạn |
 |---|---|---|
-| `question` / `question_text` | xem bảng kế tiếp | 300 ký tự |
+| `question` / `question_text` | xem bảng kế tiếp; luôn là câu hỏi **gốc**, kể cả khi bản đã chú thích mới là bản được hiện | 300 ký tự |
 | `options`, `chosen`, `recommended` | nhãn option, lựa chọn của bạn, pick của Jev — mỗi phần tử của danh sách bị cắt riêng, tối đa 50 phần tử | 300 mỗi phần tử |
 | `advice_text` | dòng đề xuất bạn đã thấy | 300 |
 | `reason` | tiêu chí khớp, hoặc với đề xuất là mô tả option + tag grounded | 160 |
@@ -713,10 +725,18 @@ thẳng API của Jev. Clone về là chạy được — không cần
 
 **Hook `AskUserQuestion` chỉ thêm thông tin.** Nó không bao giờ trả về
 `permissionDecision: "deny"` hay `"allow"`, và không bao giờ đặt `answers` vào
-`updatedInput`. Kênh `message` mặc định chỉ phát một `systemMessage` cấp cao
-nhất; kênh `annotate` tuỳ chọn còn trả về `permissionDecision: "ask"` kèm các
-câu hỏi đã chú thích, vẫn hỏi bạn. Mọi lỗi nội bộ đều để câu hỏi đúng như
-Claude đã viết.
+`updatedInput`. Kênh `annotate` mặc định trả về `permissionDecision: "ask"`
+kèm các câu hỏi đã chú thích (vẫn hỏi bạn) cùng một `systemMessage` cấp cao
+nhất; kênh `message` tuỳ chọn chỉ phát `systemMessage`. Mọi lỗi nội bộ đều để
+câu hỏi đúng như Claude đã viết.
+
+**Hook `PostToolUse` đọc lại gì.** Claude Code (2.1.284+) đưa cho nó một
+`tool_response` dạng object `{questions, answers, annotations}`, với `answers`
+khoá theo nội dung câu hỏi; bản cũ dùng phản hồi dạng văn bản, vẫn được parse.
+Với mỗi câu hỏi nó ghi một dòng `outcome` có `recommended`, `chosen` và
+`agreement` (`agree` / `disagree` / `partial` / `free_text` / `unparsed`, hoặc
+`no_advice` khi chưa hiện đề xuất nào). Cả nội dung câu hỏi gốc lẫn bản đã chú
+thích đều được chấp nhận làm khoá; dòng log lưu bản gốc.
 
 **Vì sao có thêm một hook `SessionStart`.** Claude Code hiện không chạy hook
 `PreToolUse` của riêng plugin
@@ -729,8 +749,12 @@ vào đúng entry của chính nó và để yên phần còn lại của `setti
 Một khi upstream sửa lỗi đó, đây trở thành một bản trùng vô hại — tệ nhất
 là tốn thêm một lời gọi API.
 
-**Context** lấy từ 12 lượt gần nhất của session transcript (lượt của
-subagent và lượt do máy sinh ra bị bỏ), cắt còn 6000 ký tự. Mỗi câu hỏi tốn
-khoảng $0.00002 và mất khoảng 0.7s.
+**Context** là `state` có cấu trúc được mô tả ở mục "Jev được cho xem gì" trong
+[Các gate tự động](#3-các-gate-tự-động), không phải một cửa sổ lượt cố định:
+tối đa 70.000 ký tự theo mặc định (`ASK_JEV_STATE_CHARS`), gồm 5 tin nhắn bạn
+gõ gần nhất (mỗi tin ≤3.000 ký tự), các lượt hội thoại (mỗi lượt ≤4.000, bỏ
+lượt của subagent và do máy sinh ra), CLAUDE.md và memory, git diff, và các lựa
+chọn trong quá khứ của bạn trên mọi project. Transcript chỉ được đọc từ 2 MB
+cuối.
 
 </details>
