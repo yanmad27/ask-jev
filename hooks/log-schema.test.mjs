@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
-import { askJev, logEvent, runInvocation, billingNoteShown, classifyError, redactError, stripUrlSecrets, DEFAULT_BUDGET_MS, HOOK_MARGIN_MS } from "../lib/jev.mjs";
+import { askJev, logEvent, runInvocation, billingNoteShown, classifyError, redactError, redactSecrets, stripUrlSecrets, DEFAULT_BUDGET_MS, HOOK_MARGIN_MS } from "../lib/jev.mjs";
 import * as vendor from "../paseo-plugin/server/vendor/jev.mjs";
 import { VERSION } from "../lib/version.mjs";
 import { VERSION as VENDOR_VERSION } from "../paseo-plugin/server/vendor/version.mjs";
@@ -349,4 +349,98 @@ test("computeStats on a mixed v1 + v2 log yields the D.4 keys without throwing; 
   assert.equal(s.fallbacks, 3 /* personal, advice_unavailable, cli below threshold */);
   assert.ok(!("paseo_standdown" in s.decisions.by_outcome));
   assert.doesNotThrow(() => computeStats([{}, { kind: "outcome" }, { kind: "decision" }, { kind: "call" }]));
+});
+
+test("explicit event/meta repo (Paseo passes the raw git origin) is sanitized after the merge", async () => {
+  const path = newLog();
+  const dirty = "https://user:tok@host.example/o/r.git?access_token=x#f";
+  const server = await stub(fail(500, "boom"));
+  try {
+    await withEnv(baseEnv(path, server), async () => {
+      logEvent({ kind: "decision", source: "paseo", repo: dirty });
+      logEvent({ kind: "diagnostic", repo: "git@host.example:o/r.git?x=1" });
+      logEvent({ kind: "diagnostic", repo: 42 });
+      await askJev(KEY, {}, Q, "paseo", 1500, undefined, { repo: dirty }).catch(() => {});
+    });
+  } finally {
+    await server.closeAll();
+  }
+  const all = rows(path);
+  assert.equal(all[0].repo, "https://host.example/o/r.git");
+  assert.equal(all[1].repo, "git@host.example:o/r.git");
+  assert.ok(!("repo" in all[2]));
+  const metaRows = all.filter((r) => r.kind === "call" || r.kind === "provider_error");
+  assert.equal(metaRows.length, 2);
+  for (const r of metaRows) assert.equal(r.repo, "https://host.example/o/r.git");
+  assert.ok(!/user:tok|access_token|#f/.test(readFileSync(path, "utf8")));
+});
+
+test("field caps are central: oversized question/question_text/options/chosen/recommended/reason/advice_text are capped for every writer family", async () => {
+  const path = newLog();
+  const big = "Q".repeat(5_000);
+  const server = await stub((_req, res) => ok(res, { q: { noul: 0.9 }, q__mirror: { noul: 0.1 } }));
+  try {
+    await withEnv(baseEnv(path, server), async () => {
+      logEvent({ kind: "decision", source: "hook", gate: "stop", question: big, reason: big });
+      logEvent({ kind: "decision", source: "hook", gate: "ask", mode: "advisory", question: big, options: [big, "ok"], recommended: [big], reason: big, advice_text: big });
+      logEvent({ kind: "outcome", source: "hook", question: big, options: [big], chosen: [big], recommended: [big] });
+      await vendor.runInvocation({ session_id: "p" }, async () => vendor.logEvent({ kind: "outcome", source: "paseo", question: big, chosen: [big] }));
+      logEvent({ kind: "user_choice", question: big, chosen: [big] });
+    });
+    await runCli(path, server, { state: { a: 1 }, questions: { [big]: Q.q } }).catch(() => {});
+  } finally {
+    await server.closeAll();
+  }
+  const all = rows(path);
+  assert.ok(all.length >= 6);
+  const strs = (v) => (Array.isArray(v) ? v : [v]).filter((x) => typeof x === "string");
+  for (const r of all) {
+    for (const k of ["question", "question_text", "advice_text"]) for (const x of strs(r[k])) assert.ok(x.length <= 300, `${r.kind}.${k} ${x.length}`);
+    for (const k of ["options", "chosen", "recommended"]) for (const x of strs(r[k])) assert.ok(x.length <= 300, `${r.kind}.${k} ${x.length}`);
+    for (const x of strs(r.reason)) assert.ok(x.length <= 160, `${r.kind}.reason ${x.length}`);
+  }
+  assert.ok(all.some((r) => r.source === "cli" && typeof r.question === "string"), "CLI row present");
+});
+
+test("billing note claim is atomic: concurrent hook processes in one session → exactly one notified_user:true", async () => {
+  const path = newLog();
+  const server = await stub(fail(402, "payment required"));
+  const script = `import { askJev, runInvocation } from ${JSON.stringify(new URL("../lib/jev.mjs", import.meta.url).href)};
+await runInvocation({ session_id: "RACE" }, () => askJev("k-12345678", {}, ${JSON.stringify(Q)}, "hook", 1500).catch((e) => process.stdout.write(e.notice)));`;
+  try {
+    const outs = await Promise.all(Array.from({ length: 6 }, () =>
+      execFileAsync("node", ["--input-type=module", "-e", script], { env: { ...cleanEnv(), ...baseEnv(path, server) }, encoding: "utf8" }).then((r) => r.stdout)));
+    assert.equal(outs.filter((o) => o === "billing").length, 1, outs.join());
+    assert.equal(outs.filter((o) => o === "generic").length, 5);
+  } finally {
+    await server.closeAll();
+  }
+  const pe = rows(path).filter((r) => r.kind === "provider_error");
+  assert.equal(pe.length, 6);
+  assert.equal(pe.filter((r) => r.notified_user).length, 1);
+  const { readdirSync } = await import("node:fs");
+  const markers = readdirSync(join(path, "..")).filter((f) => f.startsWith(".ask-jev-billing-"));
+  assert.equal(markers.length, 1);
+  assert.ok(!markers[0].includes("RACE"), "session id is hashed");
+  assert.equal(statSync(join(path, "..", markers[0])).mode & 0o777, 0o600);
+  await withEnv({ ASK_JEV_LOG_FILE: path }, () => assert.equal(billingNoteShown("RACE"), true));
+});
+
+test("redaction runs on the full body before truncation; Basic/bare token/short prefixed tokens covered; redactSecrets is exported for the CLI", async () => {
+  const path = newLog();
+  const body = `${"p".repeat(100)} Authorization: Basic dXNlcjpwYXNzd29yZA== key sk-abc12345`;
+  const server = await stub(fail(500, body));
+  try {
+    await withEnv(baseEnv(path, server), () => askJev("k-12345678", {}, Q, "hook", 1500).catch(() => {}));
+  } finally {
+    await server.closeAll();
+  }
+  // the secret straddles the old 120-char cut: it must be gone, not a dangling prefix
+  assert.ok(!/dXNlc|sk-abc|Authorization: Basic/.test(readFileSync(path, "utf8")));
+  assert.equal(redactSecrets("Authorization: Basic dXNlcjpwYXNzd29yZA== x"), "Authorization: [redacted] x");
+  assert.ok(!redactSecrets("failed token abc12345xyz here").includes("abc12345xyz"));
+  assert.equal(redactSecrets("token expired, try again"), "token expired, try again");
+  for (const t of ["ghp_abcdef1234", "gho_abcdef1234", "sk-abcdef1234", "github_pat_abc123def"]) assert.ok(!redactSecrets(`x ${t} y`).includes(t), t);
+  assert.equal(redactSecrets("a ".repeat(500)).length, 999, "uncapped: caller decides the cut");
+  assert.ok(!redactSecrets("clone https://u:p@h.example/r?t=1 failed").match(/u:p|t=1/));
 });
