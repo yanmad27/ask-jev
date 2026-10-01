@@ -4,7 +4,7 @@
  * in `answers` thô ra stdout. Dùng bởi skill ask-jev, hoặc trực tiếp.
  */
 import { readFileSync } from "node:fs";
-import { apiKey, askJev, logEvent, logFilePath, requestError, NOT_CHAT } from "../lib/jev.mjs";
+import { apiKey, askJev, logEvent, logFilePath, redactSecrets, requestError, NOT_CHAT } from "../lib/jev.mjs";
 import { truncate } from "../lib/gate.mjs";
 import { evidenceFindings, findingLine } from "../lib/cli-validate.mjs";
 import { computeStats, filterSince, parseEvents, recentDecisions, sinceMsFromSpec } from "../lib/stats.mjs";
@@ -158,8 +158,8 @@ async function main() {
         kind: "decision",
         source: "cli",
         gate: "cli",
-        question: name,
-        question_text: truncate(questionText, 4000),
+        question: questionText || name,
+        question_name: name,
         options: Object.keys(q.criteria ?? {}),
         outcome: cliOutcome(q, answers[name]),
         result: cliResult(q, answers[name]),
@@ -169,7 +169,7 @@ async function main() {
       });
     }
   } catch (err) {
-    return fail(err.message);
+    return fail(redactSecrets(err.message, key));
   }
 }
 

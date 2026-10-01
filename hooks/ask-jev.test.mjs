@@ -502,7 +502,7 @@ test("cli on typesafe: boolean answer is exactly {probability, confidence} — n
   assert.ok(Math.abs(a.ok.confidence - 0.9) < 1e-9);
 });
 
-test("cli decision logging: boolean question logs question/question_text/options/result/confidence, stdout unaffected", async () => {
+test("cli decision logging: boolean question logs question (text)/question_name/options/result/confidence, stdout unaffected", async () => {
   const { server, url } = await recorder([[200, {}, { model: "jev-1.13.0", answers: { ok: { type: "noul", noul: 0.9 }, ok__mirror: { type: "noul", noul: 0.1 } } }]]);
   const run = execFileAsync("node", ["bin/jev.mjs"], { env: { ...cleanEnv(), TYPESAFE_API_KEY: "tsk_abc", ASK_JEV_API_URL: url, ASK_JEV_LOG_FILE: logFile } });
   run.child.stdin.end(JSON.stringify({ state: { x: 1 }, questions: { ok: { type: "boolean", instructions: { question: "Is this ok?" }, criteria: { true: "t", false: "f" } } } }));
@@ -511,10 +511,11 @@ test("cli decision logging: boolean question logs question/question_text/options
   assert.deepEqual(JSON.parse(stdout), { ok: { probability: 0.9, confidence: 0.9 } }); // stdout byte-shape unchanged by logging
 
   const d = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l))
-    .filter((e) => e.kind === "decision" && e.source === "cli" && e.question === "ok").at(-1);
+    .filter((e) => e.kind === "decision" && e.source === "cli" && e.question_name === "ok").at(-1);
   assert.equal(d.gate, "cli");
   assert.equal(d.outcome, "true"); // 0.9 >= 0.5 cut
-  assert.equal(d.question_text, "Is this ok?");
+  assert.equal(d.question, "Is this ok?");
+  assert.equal(d.question_name, "ok");
   assert.deepEqual(d.options.sort(), ["false", "true"]);
   assert.ok(Math.abs(d.result - 0.9) < 1e-9);
   assert.ok(Math.abs(d.confidence - 0.9) < 1e-9);
@@ -532,10 +533,11 @@ test("cli decision logging: choice question logs {choice, probability} as result
   assert.deepEqual(JSON.parse(stdout), { pick: { choice: "a", probabilities: { a: 0.7, b: 0.3 } } });
 
   const d = readFileSync(logFile, "utf8").trim().split("\n").map((l) => JSON.parse(l))
-    .filter((e) => e.kind === "decision" && e.source === "cli" && e.question === "pick").at(-1);
+    .filter((e) => e.kind === "decision" && e.source === "cli" && e.question_name === "pick").at(-1);
   assert.equal(d.gate, "cli");
   assert.equal(d.outcome, "a");
-  assert.equal(d.question_text, "Pick one");
+  assert.equal(d.question, "Pick one");
+  assert.equal(d.question_name, "pick");
   assert.deepEqual(d.options.sort(), ["a", "b"]);
   assert.deepEqual(d.result, { choice: "a", probability: 0.7 });
   assert.equal(d.confidence, 0.7);

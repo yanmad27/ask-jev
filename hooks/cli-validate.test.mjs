@@ -17,9 +17,9 @@ const lacks = (input, cls) => !evidenceFindings(input).some((f) => f.class === c
 
 const TASTE_Q = { q: choice("Which tone would the user like for the release note?", ["blunt", "warm"]) };
 
-test("agent_user_description: description keys reject, quoted/free state text is not scanned; user words and diffs pass", () => {
+test("agent_user_description: description keys reject (any depth), taste prose flags; user words and diffs pass", () => {
   assert.ok(has(req('{"user_style":"prefers terse"}', { q: bool("Is `ticket` urgent?") }), "agent_user_description", "reject"));
-  assert.ok(lacks(req('{"notes":"the user probably likes dark mode"}', { q: bool("Is `ticket` urgent?") }), "agent_user_description"));
+  assert.ok(has(req('{"notes":"the user probably likes dark mode"}', { q: bool("Is `ticket` urgent?") }), "agent_user_description", "flag"));
   assert.ok(lacks(req('{"user_messages":["I prefer terse"]}', { q: bool("Is `ticket` urgent?") }), "agent_user_description"));
   assert.ok(lacks(req('{"diff":"- the user likes dark mode\\n+ the user wants light mode"}', { q: bool("Is `diff` a UI change?") }), "agent_user_description"));
   assert.ok(lacks(req('{"ticket":"Customers say they want a refund and he likes the old plan"}', { q: bool("Is `ticket` a refund request?") }), "agent_user_description"));
@@ -79,7 +79,7 @@ test("user_decision_action: actions the user decides reject; classification of f
     ["Should I reply to the thread with the fix?", bool],
   ];
   for (const [q, mk] of rejects) assert.ok(has(req('{"diff":"x"}', { q: mk(q) }), "user_decision_action", "reject"), q);
-  const optionSets = [["merge_now", "wait"], ["push", "hold"], ["force_push", "rebase"], ["submit_pr", "keep_local"], ["close_pr", "leave_open"], ["send_email", "draft_only"], ["upload", "skip"], ["invite_user", "skip"], ["purchase", "skip"], ["Push to origin", "Stay local"], ["deploy", "wait"]];
+  const optionSets = [["merge_now", "wait"], ["push", "hold"], ["force_push", "rebase"], ["submit_pr", "keep_local"], ["close_pr", "leave_open"], ["send_email", "draft_only"], ["upload", "skip"], ["invite_user", "skip"], ["purchase", "skip"], ["Push to origin", "Stay local"], ["do_not_push", "go"]];
   for (const labels of optionSets) assert.ok(has(req('{"diff":"x"}', { q: choice("What next?", labels) }), "user_decision_action", "reject"), labels.join());
   const passes = [
     bool("Does this diff touch deploy scripts?"),
@@ -99,8 +99,9 @@ test("a valid agent-internal request produces no findings", () => {
   assert.deepEqual(evidenceFindings(input), []);
 });
 
-const PEER_BRIEF = "Goal: add a --dry-run flag to the sync script. Steps: push the branch to origin when green, open a PR against main, and once approved merge and deploy to staging. The user wants a short summary, and the user probably likes terse logs. Also delete the temp dir under /tmp/sync-work and send nothing else. Do not touch UserSvc. Prefer the existing naming style.";
-const PEER_REPORT = "Done: added --dry-run. I pushed the branch to origin and opened a PR; the user asked me to merge it, so I merged and deployed. I deleted the temp dir. Tests: 12 pass. The user prefers short output so I kept it brief.";
+const PEER_BRIEF = "Goal: add a --dry-run flag to the sync script. Steps: push the branch to origin when green, open a PR against main, and once approved merge and deploy to staging. The user wants a short summary. Also delete the temp dir under /tmp/sync-work and send nothing else. Do not touch UserSvc. Prefer the existing naming style.";
+const TASTE_BRIEF = `${PEER_BRIEF} The user probably likes terse logs.`;
+const PEER_REPORT = "Done: added --dry-run. I pushed the branch to origin and opened a PR; the user asked me to merge it, so I merged and deployed. I deleted the temp dir. Tests: 12 pass. My fix works locally.";
 
 test("Lead callers: tier routing request with an action-heavy Peer brief in state is not rejected or flagged", () => {
   const tier = { type: "choice", instructions: { question: "Which Peer tier does `task` belong to?", focus: "Judge the nature of the work, not its size or how many files it touches." }, criteria: {
@@ -110,6 +111,8 @@ test("Lead callers: tier routing request with an action-heavy Peer brief in stat
   } };
   const input = { state: { task: PEER_BRIEF }, questions: { tier } };
   assert.deepEqual(evidenceFindings(input), []);
+  const taste = evidenceFindings({ state: { task: TASTE_BRIEF }, questions: { tier } });
+  assert.deepEqual(taste.map((f) => `${f.class}:${f.severity}`), ["agent_user_description:flag"]);
 });
 
 test("Lead callers: capability_failure judging a Peer's report against its spec is not self_judgement and is not rejected", () => {
@@ -129,6 +132,64 @@ test("actions/taste in the question or option labels still reject even when a Pe
   assert.ok(has(withBrief(bool("Should I push the branch to origin?")), "user_decision_action", "reject"));
   assert.ok(has(withBrief(choice("What next?", ["merge_now", "wait"])), "user_decision_action", "reject"));
   assert.ok(has(withBrief(choice("Which wording would the user like?", ["terse", "verbose"])), "taste_without_user_words", "reject"));
+});
+
+test("review repair (a): neutral question + yes/no labels whose criteria define 'push to origin' vs 'keep local' → reject", () => {
+  const q = { type: "choice", instructions: { question: "Which next step?" }, criteria: { yes: { what: "Push to origin", not_for: "no", examples: [] }, no: { what: "Keep local", not_for: "yes", examples: [] } } };
+  assert.ok(has({ state: { diff: "x" }, questions: { q } }, "user_decision_action", "reject"));
+  const b = { type: "boolean", instructions: "Which next step?", criteria: { true: "Merge the PR now", false: "Leave it open" } };
+  assert.ok(has({ state: { diff: "x" }, questions: { q: b } }, "user_decision_action", "reject"));
+});
+
+test("review repair (b): nested description-style key rejects at any depth", () => {
+  const r = evidenceFindings(req('{"context":{"user_style":"prefers terse"}}', { q: bool("Is `context` urgent?") }));
+  assert.ok(r.some((f) => f.class === "agent_user_description" && f.severity === "reject" && f.path === "state.context.user_style"));
+  assert.ok(has(req('{"items":[{"persona":"terse"}]}', { q: bool("Is `items` urgent?") }), "agent_user_description", "reject"));
+  assert.ok(has(req('{"a":{"b":{"my_summary":"fine"}}}', { q: bool("Is `a` ok?") }), "self_judgement", "reject"));
+});
+
+test("review repair (c): taste prose anywhere in state flags (never rejects); Lead shapes still produce no reject", () => {
+  const nested = req('{"context":{"notes":"the user probably likes dark mode"}}', { q: bool("Is `context` urgent?") });
+  assert.ok(has(nested, "agent_user_description", "flag"));
+  assert.ok(!classes(nested).some((c) => c.endsWith(":reject")));
+});
+
+test("review repair (d): 'What version is installed?' with no command output flags checkable_fact", () => {
+  assert.ok(has(req("{}", { q: bool("What version is installed?") }), "checkable_fact", "flag"));
+  assert.ok(lacks(req('{"command_output":"v1.5.0"}', { q: bool("What version is installed?") }), "checkable_fact"));
+});
+
+test("review repair (e): first-person ownership + evaluative question rejects; Lead capability_failure (Peer report vs spec) stays allowed", () => {
+  for (const q of ["Does my fix work?", "Is our change correct?", "Will my PR break anything?", "Did I fix it?", "Is my implementation of the parser good?"]) {
+    assert.ok(has(req('{"diff":"a to b"}', { q: bool(q) }), "self_judgement", "reject"), q);
+  }
+  const cap = bool("Does `report` show a capability failure given `spec`?");
+  assert.ok(lacks({ state: { spec: PEER_BRIEF, report: "Done. My fix works locally." }, questions: { capability_failure: cap } }, "self_judgement"));
+  assert.ok(lacks(req('{"log":"x"}', { q: bool("Does the Peer's fix work for `report`?") }), "self_judgement"));
+});
+
+test("review repair 2: classifying release/deploy/merge/publish labels is flagged ambiguous_action, not rejected; permission framing or object labels reject", () => {
+  for (const labels of [["release", "maintenance"], ["deploy", "docs"], ["merge", "feature"], ["publish", "draft"], ["ship", "chore"], ["push_notification", "bug"]]) {
+    const input = req('{"commit":"chore: bump version to 1.2.0"}', { kind: choice("Classify this commit.", labels) });
+    assert.deepEqual(classes(input), ["ambiguous_action:flag"], labels.join());
+  }
+  assert.deepEqual(classes(req('{"commit":"x"}', { kind: choice("Classify this commit.", ["feature", "bugfix"]) })), []);
+  assert.ok(has(req('{"commit":"x"}', { kind: choice("Should I ship this commit or hold it?", ["release", "hold"]) }), "user_decision_action", "reject"));
+  assert.ok(has(req('{"commit":"x"}', { kind: choice("Whether to go ahead with this commit?", ["merge", "wait"]) }), "user_decision_action", "reject"));
+  assert.ok(has(req('{"commit":"x"}', { kind: choice("Classify this commit.", ["merge_now", "wait"]) }), "user_decision_action", "reject"));
+});
+
+test("review repair 3: validator is linear on 1 MB hostile inputs (< 200 ms)", () => {
+  const big = "is my code " + "x ".repeat(500_000);
+  const hostile = "does my fix " + "a ".repeat(500_000);
+  const inputs = [
+    { state: { notes: big, context: { deep: hostile } }, questions: { q: bool(big) } },
+    { state: { user_messages: [big] }, questions: { q: bool(hostile) } },
+    { state: { x: "the user " + "z".repeat(1_000_000) }, questions: { q: choice(big, ["a", "b"]) } },
+  ];
+  const t0 = performance.now();
+  for (const i of inputs) evidenceFindings(i);
+  assert.ok(performance.now() - t0 < 200, `took ${performance.now() - t0}ms`);
 });
 
 const JEV = new URL("../bin/jev.mjs", import.meta.url).pathname;
@@ -199,8 +260,29 @@ test("CLI: a valid agent-internal request keeps working (exit 0, no warnings)", 
     assert.equal(r.code, 0);
     assert.equal(r.stderr, "");
     assert.equal(hits(), 1);
-    assert.equal(JSON.parse(readFileSync(log, "utf8").trim().split("\n").find((l) => l.includes('"decision"'))).warnings, undefined);
+    const row = JSON.parse(readFileSync(log, "utf8").trim().split("\n").find((l) => l.includes('"decision"')));
+    assert.equal(row.warnings, undefined);
+    assert.equal(row.question, "Which model tier suffices for `task`?");
+    assert.equal(row.question_name, "tier");
+    assert.equal(row.question_text, undefined);
   });
+});
+
+test("CLI: provider error text on stderr is redacted (key never printed)", async () => {
+  const server = createServer((req, res) => {
+    req.resume();
+    req.on("end", () => (res.writeHead(401), res.end("invalid key k-12345678 for Bearer abcdefghijklmnopqrstuvwxyz0123456789")));
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const log = join(mkdtempSync(join(tmpdir(), "cliv-")), "log");
+    const r = await runCli(req('{"task":"Extract invoice numbers."}', { tier: choice("Which model tier suffices for `task`?", ["haiku", "sonnet"]) }), { ASK_JEV_API_URL: `http://127.0.0.1:${server.address().port}/`, ASK_JEV_LOG_FILE: log });
+    assert.equal(r.code, 1);
+    assert.doesNotMatch(r.stderr, /k-12345678|abcdefghijklmnopqrstuvwxyz0123456789/);
+    assert.match(r.stderr, /^jev: /);
+  } finally {
+    server.close();
+  }
 });
 
 test("CLI: the shipped eval fixture still passes validation (no findings)", () => {
