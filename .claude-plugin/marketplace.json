@@ -5,7 +5,7 @@
     {
       "name": "ask-jev",
       "source": "./",
-      "description": "Ask Jev before asking you — auto-answers AskUserQuestion when the answer is determinable from context."
+      "description": "Jev advises on AskUserQuestion; you decide — plus a CLI for agent-internal judgement calls."
     }
   ]
 }

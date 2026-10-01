@@ -13,7 +13,8 @@
  * Tự sửa mỗi phiên: bản plugin đổi (cache dir đổi theo version), hay đường dẫn
  * cũ từ trước lần đổi tên jev-ask → ask-jev, đều tự cập nhật lại, không cần
  * người dùng làm gì. Hết bug ở Claude Code thì entry này thừa nhưng vô hại —
- * hai hook cùng "deny" một câu hỏi không sai, chỉ tốn thêm một lần gọi API.
+ * hai hook cùng chạy cho một câu hỏi thì hook sau im lặng nhờ khóa trùng (isDuplicate trong
+ * ask-jev.mjs): vẫn chỉ một lần gọi Jev và một dòng tư vấn, câu hỏi không bao giờ bị chặn.
  *
  * Không đụng gì khác trong settings.json ngoài đúng entry của mình. Đọc/ghi
  * lỗi kiểu gì cũng im lặng bỏ qua — hook phụ này không được phép làm hỏng
