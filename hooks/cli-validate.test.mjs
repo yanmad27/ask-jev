@@ -138,7 +138,7 @@ test("round 2 (1): action only in criteria definitions/labels is a flag, not a r
   const deployBuild = { type: "choice", instructions: { question: "Classify the requested operation." }, criteria: { deploy: { what: "Deploy to production", not_for: "build", examples: [] }, build: { what: "Build locally", not_for: "deploy", examples: [] } } };
   assert.deepEqual(classes({ state: { request: "ship it" }, questions: { q: deployBuild } }), ["ambiguous_action:flag"]);
   const neutral = { type: "choice", instructions: { question: "Which next step?" }, criteria: { yes: { what: "Proceed with the deployment", not_for: "no", examples: [] }, no: { what: "Keep it local", not_for: "yes", examples: [] } } };
-  assert.ok(!classes({ state: { diff: "x" }, questions: { q: neutral } }).some((c) => c.endsWith(":reject")));
+  assert.deepEqual(classes({ state: { diff: "x" }, questions: { q: neutral } }), ["ambiguous_action:flag"]);
   const pushOrigin = { type: "choice", instructions: { question: "Which next step?" }, criteria: { yes: { what: "Push to origin", not_for: "no", examples: [] }, no: { what: "Keep local", not_for: "yes", examples: [] } } };
   assert.deepEqual(classes({ state: { diff: "x" }, questions: { q: pushOrigin } }), ["ambiguous_action:flag"]);
   const bool2 = { type: "boolean", instructions: "Which next step?", criteria: { true: "Merge the PR now", false: "Leave it open" } };
@@ -146,6 +146,14 @@ test("round 2 (1): action only in criteria definitions/labels is a flag, not a r
   assert.ok(has({ state: { diff: "x" }, questions: { q: { ...pushOrigin, instructions: { question: "Should I do the next step?" } } } }, "user_decision_action", "reject"));
   assert.ok(has({ state: { diff: "x" }, questions: { q: { ...pushOrigin, instructions: { question: "Which next step?", focus: "ok to go ahead?" } } } }, "user_decision_action", "reject"));
   assert.ok(has({ state: { diff: "x" }, questions: { q: { ...deployBuild, criteria: { merge_now: { what: "m", not_for: "build", examples: [] }, build: { what: "b", not_for: "merge_now", examples: [] } } } } }, "user_decision_action", "reject"));
+});
+
+test("round 3: 'proceed with / go ahead with / carry out / do the <action noun>' in criteria flags ambiguous_action (never silent, never reject)", () => {
+  const mk = (yes) => ({ type: "choice", instructions: { question: "Which next step?" }, criteria: { yes: { what: yes, not_for: "no", examples: [] }, no: { what: "Keep it local", not_for: "yes", examples: [] } } });
+  for (const yes of ["Proceed with the deployment", "Go ahead with the release", "Carry out the merge", "Do the rollout", "Proceed with the database migration", "Go ahead with this payment", "Do the purchase"]) {
+    assert.deepEqual(classes({ state: { diff: "x" }, questions: { q: mk(yes) } }), ["ambiguous_action:flag"], yes);
+  }
+  assert.deepEqual(classes({ state: { diff: "x" }, questions: { q: mk("Proceed with the analysis") } }), []);
 });
 
 test("round 2 (2): 'should my/our X be accepted/approved/merged…' and 'is my X ready/good enough' reject self_judgement", () => {
