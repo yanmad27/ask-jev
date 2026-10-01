@@ -24,10 +24,10 @@ dòng của Jev được nối vào nội dung câu hỏi (xem
 [cài đặt kênh](#1-đề-xuất-cho-askuserquestion)).
 
 ```
-"Dùng thư viện nào để parse ngày?"     → Jev đề xuất: date-fns (1.00) — đã có trong package.json
-"Đóng gói thành plugin hay skill?"     → Jev đề xuất: "Plugin" (#1) (0.95)
+"Dùng thư viện nào để parse ngày?"     → Jev đề xuất: "date-fns" (#1) (1.00) — [grounded in your messages/past choices]
+"Đóng gói thành plugin hay skill?"     → Jev đề xuất: "Plugin" (#1) (0.95) — [grounded in your messages/past choices]
 "Bạn muốn giao diện tông màu nào?"     → Jev nghiêng về: "Teal" (#2) (0.55) — [no direct statement from you — a guess]
-"Có xoá luôn 3 environment cũ không?"  → Jev đề xuất: "Giữ lại" (#2) (0.88) — và bạn vẫn là người quyết
+"Có xoá luôn 3 environment cũ không?"  → Jev đề xuất: "Giữ lại" (#2) (0.88) — [grounded in your messages/past choices]
 ```
 
 (Dòng đề xuất mà hook của Claude Code hiển thị bằng tiếng Việt: `đề xuất` =
@@ -139,7 +139,7 @@ bạn không?" nữa — câu hỏi về sở thích, cá nhân, thậm chí ph�
 được đề xuất, vì bạn là người quyết. Xem [Bạn sẽ thấy gì](#bạn-sẽ-thấy-gì) để
 biết định dạng.
 
-Dòng đề xuất có dạng `Jev đề xuất: <option> (<độ tin>) — <thẻ grounded>`
+Dòng đề xuất có dạng `Jev đề xuất: "<nhãn>" (#n) (<độ tin>) — <thẻ grounded>`
 (`Jev nghiêng về:` khi độ tin dưới ngưỡng). "Lý do" một dòng là một **thẻ grounded** do
 chính plugin sinh ra — lựa chọn có dựa trên lời bạn nói hay lựa chọn trước đây của bạn không —
 và không bao giờ là văn bản chép từ mô tả option của agent (mô tả vẫn hiện ngay trên option),

@@ -24,10 +24,10 @@ and their labels intact. By default Jev's line is appended to the question text
 (see [the channel setting](#1-advice-on-askuserquestion)).
 
 ```
-"Which date library should we use?"        → Jev đề xuất: date-fns (1.00) — already in package.json
-"Package this as a plugin or a skill?"     → Jev đề xuất: "Plugin" (#1) (0.95)
+"Which date library should we use?"        → Jev đề xuất: "date-fns" (#1) (1.00) — [grounded in your messages/past choices]
+"Package this as a plugin or a skill?"     → Jev đề xuất: "Plugin" (#1) (0.95) — [grounded in your messages/past choices]
 "Which colour palette do you want?"        → Jev nghiêng về: "Teal" (#2) (0.55) — [no direct statement from you — a guess]
-"Delete the three stale environments?"     → Jev đề xuất: "Keep them" (#2) (0.88) — and you still decide
+"Delete the three stale environments?"     → Jev đề xuất: "Keep them" (#2) (0.88) — [grounded in your messages/past choices]
 ```
 
 (The one-line advice the Claude Code hook shows is in Vietnamese —
@@ -138,7 +138,7 @@ ground that pick). There is no
 questions get advice too, because you are the one deciding. See
 [What you'll see](#what-youll-see) for the format.
 
-The advice line is `Jev đề xuất: <option> (<confidence>) — <grounded tag>`
+The advice line is `Jev đề xuất: "<label>" (#n) (<confidence>) — <grounded tag>`
 (`Jev nghiêng về:` when confidence is below the threshold). The one-line reason
 is a **grounded tag** the plugin generates itself — whether your own words or past choices back the pick —
 and never text copied from the agent's option description (the description stays
