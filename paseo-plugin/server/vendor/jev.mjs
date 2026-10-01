@@ -1,9 +1,12 @@
-import { readFileSync, appendFileSync } from "node:fs";
+import { readFileSync, appendFileSync, statSync, chmodSync, openSync, closeSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { execSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { env } from "./env.mjs";
+import { autonomy } from "./gate.mjs";
+import { VERSION } from "./version.mjs";
 
 // Hai provider: `typesafe` (mặc định, gọi thẳng api.typesafe.ai) và `vercel` (legacy, qua Vercel AI Gateway).
 const PROVIDERS = {
@@ -16,6 +19,11 @@ const MIN_ATTEMPT_MS = 1500; // p90 latency của call thành công ngay lần �
 // attempt — bug cũ: 2 attempt full-timeout cộng backoff (4000+300+4000=8300ms) có thể vượt
 // timeout của hooks.json (8000ms), hook bị Claude Code kill giữa chừng = fail-open câm lặng.
 const TIMEOUT_MS = 8_000;
+// Khoảng đệm tối thiểu giữa deadline nội bộ của askJev và timeout của hook (hooks.json) — nếu host kill
+// hook trước deadline thì không dòng log nào được ghi (rủi ro còn lại, không xử lý được trong process).
+export const DEFAULT_BUDGET_MS = TIMEOUT_MS;
+export const HOOK_MARGIN_MS = 1_000;
+export const LOG_SCHEMA = 2;
 
 // Định dạng request dùng chung cho SessionStart, lời nhắc mỗi lượt và lỗi CLI — một nguồn duy nhất.
 // Lời nhắc có sẵn lệnh chạy nên agent hay bỏ qua skill; thiếu shape ở đây thì nó tự chế
@@ -51,6 +59,11 @@ export function logFilePath() {
   return env("LOG_FILE", join(homedir(), ".claude", "ask-jev.log"));
 }
 
+/** Bỏ userinfo, query và fragment khỏi mọi URL trong chuỗi — để lộ token là rò rỉ bảo mật. */
+export function stripUrlSecrets(text) {
+  return String(text ?? "").replace(/\b([a-z][a-z0-9+.-]*:\/\/)([^\s/?#]*@)?([^\s?#]*)(?:[?#]\S*)?/gi, "$1$3");
+}
+
 // Cache ở module scope — logEvent là hot path, không shell out git mỗi dòng log.
 let repoUrl;
 let repoUrlCached = false;
@@ -58,10 +71,9 @@ function getRepoUrl() {
   if (!repoUrlCached) {
     repoUrlCached = true;
     try {
-      repoUrl = execSync("git config --get remote.origin.url", { timeout: 1000, stdio: ["ignore", "pipe", "ignore"] })
-        .toString()
-        .trim()
-        .replace(/(^[a-z]+:\/\/)[^/@]+@/i, "$1") || undefined; // bỏ user[:token]@ nếu có, để lộ token là rò rỉ bảo mật
+      repoUrl = stripUrlSecrets(
+        execSync("git config --get remote.origin.url", { timeout: 1000, stdio: ["ignore", "pipe", "ignore"] }).toString().trim(),
+      ).replace(/[?#].*$/, "") || undefined; // dạng scp (git@host:o/r) không có "://" nên chỉ cần bỏ query/fragment
     } catch {
       repoUrl = undefined; // không phải git repo, không có remote, v.v.
     }
@@ -73,8 +85,88 @@ function getRepoUrl() {
 // giống nhau cho mọi phiên; xem quyết định của Jev khi chọn field này).
 const agentId = process.env.PASEO_AGENT_ID || undefined;
 
+// Metadata của một lệnh gọi logic (invocation_id, session_id, source, threshold) đi theo AsyncLocalStorage:
+// hai request Paseo chạy xen kẽ trong cùng process không được lẫn trường dấu của nhau.
+const invocationStore = new AsyncLocalStorage();
+let processInvocationId;
+
+export function runInvocation(ctx, fn) {
+  return invocationStore.run({ ...(ctx ?? {}) }, fn);
+}
+
+export function currentInvocation() {
+  return invocationStore.getStore();
+}
+
+function defaultThreshold() {
+  const t = Number(env("ASK_THRESHOLD", 0.8));
+  return Number.isFinite(t) ? t : 0.8;
+}
+
+const tightened = new Set();
+// File log tạo mới với 0600 (mode chỉ có tác dụng lúc tạo); log cũ 0644 được siết một lần mỗi process.
+function tightenLog(path) {
+  if (tightened.has(path)) return;
+  tightened.add(path);
+  try {
+    if (statSync(path).mode & 0o077) chmodSync(path, 0o600);
+  } catch {
+    // chưa tồn tại (sẽ tạo 0600) hoặc không chmod được — best effort
+  }
+}
+
+// C0 (trừ \n, \t), DEL, C1, zero-width, bidi override/isolate, U+2028/9: chuỗi lấy từ log mà in thẳng ra terminal có thể
+// chứa escape (ESC]0;… / ESC[2J) — ghi vào log đã bỏ, và nơi in log (jev stats) bỏ thêm lần nữa cho dòng cũ.
+const CONTROL_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+const PRINT_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]+/g;
+
+/** Chuỗi an toàn để in ra terminal: mọi ký tự điều khiển/ẩn (kể cả xuống dòng) thành một khoảng trắng. */
+export function printable(value) {
+  return String(value ?? "").replace(PRINT_CONTROL_CHARS, " ");
+}
+
+function scrub(v) {
+  if (typeof v === "string") return v.replace(CONTROL_CHARS, "");
+  if (Array.isArray(v)) return v.map(scrub);
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, scrub(x)]));
+  return v;
+}
+
+const FIELD_CAP = 300;
+const REASON_CAP = 160;
+const MAX_LIST = 50;
+const capText = (v, n) => (typeof v === "string" && v.length > n ? `${v.slice(0, n - 1)}…` : v);
+const NAME_CAP = 120;
+const MAX_WARNINGS = 20;
+const asCapped = (x) => (typeof x === "string" ? capText(x, FIELD_CAP) : x !== null && typeof x === "object" ? capText(JSON.stringify(x), FIELD_CAP) : x);
+// Mảng → cắt từng phần tử (≤50); giá trị đơn (chuỗi/object) cũng bị cắt thay vì lọt qua.
+const capList = (v) => (Array.isArray(v) ? v.slice(0, MAX_LIST).map(asCapped) : asCapped(v));
+const capWarnings = (v) =>
+  Array.isArray(v)
+    ? v.slice(0, MAX_WARNINGS).map((w) => (w && typeof w === "object"
+      ? { class: capText(String(w.class ?? ""), 40), path: capText(String(w.path ?? ""), FIELD_CAP), message: capText(String(w.message ?? ""), FIELD_CAP) }
+      : capText(String(w), FIELD_CAP)))
+    : asCapped(v);
+
+/** Giới hạn độ dài tập trung cho mọi writer (design §D.5): question/question_text/option/chosen/free-text ≤300, question_name ≤120, warnings ≤20 mục × (path, message ≤300), reason ≤160, advice_text ≤300; repo bỏ userinfo/query/fragment. */
+function sanitizeRow(line) {
+  for (const k of Object.keys(line)) line[k] = scrub(line[k]);
+  for (const k of ["question", "question_text", "advice_text"]) line[k] = capText(line[k], FIELD_CAP);
+  line.reason = capText(line.reason, REASON_CAP);
+  line.question_name = capText(line.question_name, NAME_CAP);
+  line.warnings = capWarnings(line.warnings);
+  for (const k of ["options", "chosen", "recommended"]) line[k] = capList(line[k]);
+  if (line.repo !== undefined) {
+    const clean = typeof line.repo === "string" ? stripUrlSecrets(line.repo).replace(/[?#].*$/, "") : "";
+    if (clean) line.repo = clean;
+    else delete line.repo;
+  }
+  return line;
+}
+
 /**
  * Một dòng JSON mỗi sự kiện. Không bao giờ throw — logging không được phép làm hỏng caller.
+ * Mọi dòng được đóng dấu schema/version/invocation_id/session_id/autonomy/threshold (lib/ doc: schema v2);
  * `event_id` luôn do đây phát ra (truy vết từng dòng); `repo`/`agent` suy từ tiến trình hiện tại
  * nhưng `event` (agent/repo/session_id/request_id do caller truyền, vd Paseo plugin ngoài git
  * repo của phiên này) ghi đè vì được spread sau cùng.
@@ -83,16 +175,115 @@ export function logEvent(event) {
   if (env("LOG") === "0") return;
   try {
     const repo = getRepoUrl();
+    const ctx = currentInvocation() ?? {};
+    processInvocationId ??= randomUUID();
     const line = {
       ts: new Date().toISOString(),
       event_id: randomUUID(),
+      schema: LOG_SCHEMA,
+      version: VERSION,
+      invocation_id: ctx.invocation_id ?? processInvocationId,
+      session_id: ctx.session_id ?? null,
+      autonomy: autonomy(),
+      threshold: ctx.threshold !== undefined ? ctx.threshold : defaultThreshold(),
+      ...(ctx.source && !event.source ? { source: ctx.source } : {}),
       ...(repo ? { repo } : {}),
       ...(agentId ? { agent: agentId } : {}),
       ...event,
     };
-    appendFileSync(logFilePath(), JSON.stringify(line) + "\n");
+    for (const k of ["invocation_id", "session_id", "threshold"]) if (line[k] === undefined) line[k] = null;
+    sanitizeRow(line);
+    const path = logFilePath();
+    tightenLog(path);
+    appendFileSync(path, JSON.stringify(line) + "\n", { mode: 0o600 });
   } catch {
     // đĩa đầy, thư mục không tồn tại, v.v. — bỏ qua
+  }
+}
+
+const SECRET_TOKEN = "[\\w.~+/=-]";
+// [regex, replacement] — thứ tự quan trọng: header/ngữ cảnh trước, rồi tới token trơ.
+const REDACT_PATTERNS = [
+  [/\b(authorization\s*[:=]\s*)(?:basic|bearer|token)\s+\S+/gi, "$1[redacted]"],
+  [/\bBearer\s+[\w.~+/=-]+/gi, "[redacted]"],
+  [/\bBasic\s+(?=[A-Za-z0-9+/]*[\d=+/])[A-Za-z0-9+/]{8,}={0,2}/g, "[redacted]"],
+  [/\b(api[_-]?key|token|secret|authorization|password)(["']?\s*[:=]\s*["']?)[^\s"',}]+/gi, "$1$2[redacted]"],
+  [new RegExp(`\\b(token|api[ _-]?key|secret|password)\\s+(?=${SECRET_TOKEN}*\\d)${SECRET_TOKEN}{8,}`, "gi"), "$1 [redacted]"],
+  [/\b(?:ghp|gho|ghu|ghs|ghr|github_pat|glpat|sk|vck|pk|ts|tsk|xox[abp])[-_][\w-]{6,}/gi, "[redacted]"],
+  [/\b[A-Za-z0-9_-]{32,}\b/g, "[redacted]"],
+];
+const ERROR_TEXT_CAP = 200;
+
+/** Xoá key/token, userinfo/query/fragment của URL khỏi văn bản bất kỳ (không cắt độ dài) — dùng cho stderr của CLI. */
+export function redactSecrets(text, key) {
+  let out = String(text ?? "");
+  if (key && key.length >= 4) out = out.split(key).join("[redacted]");
+  out = stripUrlSecrets(out);
+  for (const [re, to] of REDACT_PATTERNS) out = out.replace(re, to);
+  return out.replace(/\s+/g, " ").trim();
+}
+
+/** Văn bản lỗi từ provider trước khi vào log: redact toàn văn rồi mới cắt ≤200. */
+export function redactError(text, key) {
+  const out = redactSecrets(text, key);
+  return out.length > ERROR_TEXT_CAP ? `${out.slice(0, ERROR_TEXT_CAP - 1)}…` : out;
+}
+
+const BILLING_RE = /credit|billing|quota|payment/i;
+
+/** billing|auth|rate_limit|timeout|server|network|other — billing đứng đầu: 402, hoặc body nhắc credit/billing/quota/payment. */
+export function classifyError(err) {
+  const status = err?.status;
+  if (status === 402 || BILLING_RE.test(err?.body ?? "")) return "billing";
+  if (status === 401 || status === 403) return "auth";
+  if (status === 429) return "rate_limit";
+  if (status >= 500 && status < 600) return "server";
+  if (err?.name === "TimeoutError" || err?.name === "AbortError" || /timed? ?out/i.test(err?.message ?? "")) return "timeout";
+  if (err instanceof TypeError || /fetch failed|ECONN|ENOTFOUND|EAI_AGAIN|socket|network/i.test(`${err?.message} ${err?.cause?.code ?? ""}`)) return "network";
+  return "other";
+}
+
+const billingMarkerPath = (sessionId) =>
+  join(env("STATE_DIR") || dirname(logFilePath()), `.ask-jev-billing-${createHash("sha256").update(String(sessionId)).digest("hex").slice(0, 32)}`);
+
+function billingMarkerExists(sessionId) {
+  try {
+    statSync(billingMarkerPath(sessionId));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Thông báo billing đã hiện cho session_id này chưa? Marker (atomic) hoặc dòng provider_error trong log — hai process hook cùng phiên thấy nhau. */
+export function billingNoteShown(sessionId) {
+  if (!sessionId) return false;
+  if (billingMarkerExists(sessionId)) return true;
+  try {
+    for (const line of readFileSync(logFilePath(), "utf8").split("\n")) {
+      if (!line.includes(sessionId)) continue;
+      try {
+        const e = JSON.parse(line);
+        if (e.kind === "provider_error" && e.billing === true && e.notified_user === true && e.session_id === sessionId) return true;
+      } catch {
+        continue;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+/** Giành quyền hiện thông báo billing: tạo marker O_EXCL (0600) — đúng một process thắng. Không tạo được marker (lỗi ngoài EEXIST) → quay về đọc log. */
+export function claimBillingNote(sessionId) {
+  if (!sessionId) return true;
+  try {
+    closeSync(openSync(billingMarkerPath(sessionId), "wx", 0o600));
+    return true;
+  } catch (err) {
+    if (err?.code === "EEXIST") return false;
+    return !billingNoteShown(sessionId);
   }
 }
 
@@ -195,8 +386,9 @@ async function attempt(key, state, questions, timeoutMs, info) {
         hint = " — this does not look like a Vercel key (vck_...): if it is a typesafe key, set ASK_JEV_PROVIDER=typesafe";
       }
     }
-    const err = new Error(`${isVercel ? "gateway" : "typesafe"} ${res.status} ${body.slice(0, 120)}${hint}`);
+    const err = new Error(`${isVercel ? "gateway" : "typesafe"} ${res.status} ${redactSecrets(body, key).slice(0, 120)}${hint}`);
     err.status = res.status;
+    err.body = body.slice(0, 2_000);
     err.retryAfterMs = Number(res.headers.get("retry-after")) * 1000 || 0;
     throw err;
   }
@@ -279,7 +471,7 @@ export async function askJev(key, state, questions, source = "cli", budgetMs = T
   const start = Date.now();
   const deadline = start + budgetMs;
   let status = "ok";
-  let error;
+  let failure;
   let attempts = 0;
   const perAttempt = Math.max(1000, Math.floor((budgetMs - BACKOFF_MS) / 2));
   let name = "unknown";
@@ -303,13 +495,29 @@ export async function askJev(key, state, questions, source = "cli", budgetMs = T
     return withConfidence(questions, reconcile(questions, raw));
   } catch (err) {
     status = "error";
-    error = err.message;
+    failure = err;
     throw err;
   } finally {
+    const errorClass = failure ? classifyError(failure) : undefined;
+    const message = failure ? redactError(failure.message, key) : undefined;
+    const httpStatus = failure?.status;
     logEvent({
-      kind: "call", source, status, error, retried: attempts > 1, attempts, latency_ms: Date.now() - start, provider: name, model: info.model, ...(info.apiModel ? { api_model: info.apiModel } : {}),
+      kind: "call", source, status, ...(failure ? { error: message, error_class: errorClass, ...(httpStatus ? { http_status: httpStatus } : {}) } : {}),
+      retried: attempts > 1, attempts, latency_ms: Date.now() - start, provider: name, model: info.model, ...(info.apiModel ? { api_model: info.apiModel } : {}),
       n_questions: Object.keys(sent).length, ...(stateSizes ? { state_sizes: stateSizes } : {}), // đôi lên với câu boolean — có chủ đích
       ...meta, // agent/repo/session_id/request_id tường minh (vd Paseo plugin) đè giá trị suy từ tiến trình
     });
+    if (failure) {
+      const billing = errorClass === "billing";
+      const sid = meta.session_id ?? currentInvocation()?.session_id;
+      const notifyBilling = billing && claimBillingNote(sid);
+      failure.errorClass = errorClass;
+      failure.notice = billing && notifyBilling ? "billing" : "generic";
+      logEvent({
+        kind: "provider_error", source, ...(meta.gate ? { gate: meta.gate } : {}), ...(meta.question_index !== undefined ? { question_index: meta.question_index } : {}),
+        error_class: errorClass, ...(httpStatus ? { http_status: httpStatus } : {}), message, fail_open: true, billing, notified_user: notifyBilling,
+        ...meta,
+      });
+    }
   }
 }

@@ -111,11 +111,25 @@ export function AskJevPanel({ theme, layout, workspaceId }: PluginWorkspacePanel
         <Text style={[styles.muted, { alignSelf: "center" }]}>{stats.scope}</Text>
       </View>
       <View style={styles.tiles}>
-        <Tile styles={styles} label="Calls" value={String(stats.calls.total)} />
-        <Tile styles={styles} label="Jev decided" value={`${stats.decisions.positive_pct.toFixed(0)}%`} />
-        <Tile styles={styles} label="Fell back to user" value={`${stats.decisions.fallback_pct.toFixed(0)}%`} />
-        <Tile styles={styles} label="User overrides" value={String(stats.user_overrides)} />
+        <Tile styles={styles} label="Calls / error rate" value={`${stats.calls.total} / ${(stats.calls.error_rate * 100).toFixed(0)}%`} />
+        <Tile styles={styles} label="Advice given" value={String(stats.advisory.advised)} />
+        <Tile styles={styles} label="Advice unavailable" value={String(stats.advisory.advice_unavailable)} />
+        <Tile styles={styles} label="Human answers" value={String(stats.human_answers)} />
+        <Tile styles={styles} label="Agreement with Jev" value={`${stats.agreement.agreement_pct.toFixed(0)}% (${stats.agreement.agree} of ${stats.agreement.compared})`} />
+        <Tile styles={styles} label="Stand-downs" value={String(stats.standdowns.total)} />
         <Tile styles={styles} label="Avg / p95 latency" value={`${stats.calls.avg_latency_ms}ms / ${stats.calls.p95_latency_ms}ms`} />
+      </View>
+      <View>
+        <Text style={styles.muted}>Entry point · decisions · calls · errors · error rate</Text>
+        {Object.keys({ ...stats.calls.by_source, ...stats.decisions.by_source }).map((entry) => {
+          const c = stats.calls.by_source[entry] ?? { calls: 0, errors: 0, error_rate: 0 };
+          const d = stats.decisions.by_source[entry]?.decisions ?? 0;
+          return (
+            <Text key={entry} style={styles.muted}>
+              {`${entry} · ${d} · ${c.calls} · ${c.errors} · ${(c.error_rate * 100).toFixed(0)}%`}
+            </Text>
+          );
+        })}
       </View>
 
       <View style={styles.row}>

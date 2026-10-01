@@ -1,5 +1,5 @@
 {
   "name": "ask-jev",
   "version": "1.5.0",
-  "description": "Ask Jev before asking you. Intercepts AskUserQuestion and answers it from conversation context when the answer is determinable — and stays out of the way when the choice is yours."
+  "description": "Jev advises on AskUserQuestion; you decide. Shows Jev's recommendation next to each question, records what you chose, and offers a CLI for agent-internal judgement calls."
 }

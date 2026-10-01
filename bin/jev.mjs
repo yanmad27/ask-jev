@@ -4,13 +4,14 @@
  * in `answers` thô ra stdout. Dùng bởi skill ask-jev, hoặc trực tiếp.
  */
 import { readFileSync } from "node:fs";
-import { apiKey, askJev, logEvent, logFilePath, requestError, NOT_CHAT } from "../lib/jev.mjs";
+import { apiKey, askJev, logEvent, logFilePath, redactSecrets, requestError, printable, NOT_CHAT } from "../lib/jev.mjs";
 import { truncate } from "../lib/gate.mjs";
+import { evidenceFindings, findingLine } from "../lib/cli-validate.mjs";
 import { computeStats, filterSince, parseEvents, recentDecisions, sinceMsFromSpec } from "../lib/stats.mjs";
 
-function fail(message) {
+function fail(message, code = 1) {
   process.stderr.write(`jev: ${message}\n`);
-  process.exit(1);
+  process.exit(code);
 }
 
 // result: boolean/noul → probability thô; choice → {choice, probability của lựa chọn đó};
@@ -68,30 +69,60 @@ function stats(args) {
   const summary = computeStats(events);
 
   if (args.includes("--json")) {
-    process.stdout.write(JSON.stringify(summary) + "\n");
+    process.stdout.write(JSON.stringify(scrubStrings(summary)) + "\n");
     return;
   }
 
-  process.stdout.write(`Calls: ${summary.calls.total} (ok ${summary.calls.ok}, error ${summary.calls.error})\n`);
-  process.stdout.write(`Latency: avg ${summary.calls.avg_latency_ms}ms, p95 ${summary.calls.p95_latency_ms}ms\n`);
-  process.stdout.write(`Jev decided: ${summary.decisions.positive_pct.toFixed(1)}%  Fell back to user: ${summary.decisions.fallback_pct.toFixed(1)}%  User overrides: ${summary.user_overrides}\n\n`);
-  process.stdout.write("Decisions by outcome:\n");
+  const out = (line) => process.stdout.write(`${line.split("\n").map(printable).join("\n")}\n`);
+  const p = printable;
+  const c = summary.calls;
+  const ag = summary.agreement;
+  out(`Calls: ${c.total} (ok ${c.ok}, error ${c.error})  error rate ${(c.error_rate * 100).toFixed(1)}%`);
+  out(`Latency: avg ${c.avg_latency_ms}ms, p95 ${c.p95_latency_ms}ms`);
+  out(`Human answers: ${summary.human_answers}   Agreement with Jev: ${ag.compared ? `${ag.agreement_pct.toFixed(1)}% (${ag.agree} of ${ag.compared} compared; disagree ${ag.disagree}, partial ${ag.partial})` : "n/a (no answers compared with a recommendation)"}`);
+  const adv = summary.advisory;
+  out(`Advice on AskUserQuestion: ${adv.questions} questions, advised ${adv.advised} (strong ${adv.strong}, weak ${adv.weak}), unavailable ${adv.advice_unavailable}`);
+  out(`Positive outcomes: ${summary.decisions.positive_pct.toFixed(1)}%  Fallbacks: ${summary.decisions.fallback_pct.toFixed(1)}%`);
+  out("  (CLI rows: positive = a strong result, confidence at or above the threshold; the log only observes the result, not whether the agent acted on it)");
+  out("\nBy entry point:");
+  out(`  ${"entry point".padEnd(14)} ${"decisions".padStart(9)} ${"calls".padStart(6)} ${"errors".padStart(7)} ${"error rate".padStart(11)}`);
+  const entryPoints = new Set([...Object.keys(c.by_source), ...Object.keys(summary.decisions.by_source)]);
+  for (const ep of entryPoints) {
+    const call = c.by_source[ep] ?? { calls: 0, errors: 0, error_rate: 0 };
+    const dec = summary.decisions.by_source[ep]?.decisions ?? 0;
+    out(`  ${p(ep).padEnd(14)} ${String(dec).padStart(9)} ${String(call.calls).padStart(6)} ${String(call.errors).padStart(7)} ${`${(call.error_rate * 100).toFixed(1)}%`.padStart(11)}`);
+  }
+  const sd = summary.standdowns;
+  out(`\nStand-downs (not decisions, not errors): ${sd.total}${sd.total ? `  ${Object.entries(sd.by_reason).map(([r, n]) => `${p(r)} ${n}`).join(", ")}` : ""}`);
+  const pe = summary.provider_errors;
+  out(`Provider errors: ${pe.total}${pe.total ? `  ${Object.entries(pe.by_class).map(([k, n]) => `${p(k)} ${n}`).join(", ")}` : ""}`);
+  out("\nDecisions by outcome:");
   for (const [outcome, count] of Object.entries(summary.decisions.by_outcome)) {
     const pct = summary.decisions.total ? ((count / summary.decisions.total) * 100).toFixed(1) : "0.0";
-    process.stdout.write(`  ${outcome.padEnd(20)} ${String(count).padStart(4)}  ${pct}%\n`);
+    out(`  ${p(outcome).padEnd(20)} ${String(count).padStart(4)}  ${pct}%`);
   }
-  process.stdout.write("\nBy gate:\n");
+  out("\nBy gate:");
   for (const [gate, g] of Object.entries(summary.decisions.by_gate)) {
     const pct = g.total ? ((g.positive / g.total) * 100).toFixed(1) : "0.0";
-    const top = Object.entries(g.by_outcome).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([o, c]) => `${o} ${c}`).join(", ");
-    process.stdout.write(`  ${gate.padEnd(12)} calls ${String(g.total).padStart(4)}  positive ${pct.padStart(5)}%  ${top}\n`);
+    const top = Object.entries(g.by_outcome).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([o, n]) => `${p(o)} ${n}`).join(", ");
+    out(`  ${p(gate).padEnd(12)} calls ${String(g.total).padStart(4)}  positive ${pct.padStart(5)}%  ${top}`);
   }
-  process.stdout.write("\nRecent decisions:\n");
+  out("\nRecent decisions:");
   for (const d of recentDecisions(events, 10)) {
-    const q = d.question.length > 60 ? `${d.question.slice(0, 57)}...` : d.question;
-    const extra = d.label ? (d.confidence != null ? `${d.label} (${Number(d.confidence).toFixed(2)})` : d.label) : "";
-    process.stdout.write(`  ${d.ts}  ${d.outcome.padEnd(18)} ${q.padEnd(62)} ${extra}\n`);
+    const question = p(d.question);
+    const q = question.length > 60 ? `${question.slice(0, 57)}...` : question;
+    const label = p(d.label);
+    const extra = label ? (d.confidence != null ? `${label} (${Number(d.confidence).toFixed(2)})` : label) : "";
+    out(`  ${p(d.ts)}  ${p(d.outcome).padEnd(18)} ${q.padEnd(62)} ${extra}`);
   }
+}
+
+/** Mọi chuỗi (và khóa) lấy từ log phải qua printable() trước khi ra stdout — kể cả ở chế độ --json. */
+function scrubStrings(v) {
+  if (typeof v === "string") return printable(v);
+  if (Array.isArray(v)) return v.map(scrubStrings);
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [printable(k), scrubStrings(x)]));
+  return v;
 }
 
 async function main() {
@@ -115,6 +146,15 @@ async function main() {
   const invalid = requestError(input);
   if (invalid) return fail(`${invalid}. ${NOT_CHAT}`);
 
+  const findings = evidenceFindings(input);
+  const rejects = findings.filter((f) => f.severity === "reject");
+  if (rejects.length) {
+    for (const f of rejects) process.stderr.write(`${findingLine(f, "rejected")}\n`);
+    process.exit(2);
+  }
+  for (const f of findings) process.stderr.write(`${findingLine(f, "warning")}\n`);
+  const warnings = findings.map(({ class: cls, path, message }) => ({ class: cls, path, message: truncate(message, 300) }));
+
   const key = apiKey();
   if (!key) return fail("no API key (set TYPESAFE_API_KEY or ~/.claude/ask-jev.key)");
 
@@ -129,17 +169,18 @@ async function main() {
         kind: "decision",
         source: "cli",
         gate: "cli",
-        question: name,
-        question_text: truncate(questionText, 4000),
+        question: questionText || name,
+        question_name: name,
         options: Object.keys(q.criteria ?? {}),
         outcome: cliOutcome(q, answers[name]),
         result: cliResult(q, answers[name]),
         confidence: cliConfidence(q, answers[name]),
         ...(sizes ? { state_sizes: sizes } : {}),
+        ...(warnings.length ? { warnings } : {}),
       });
     }
   } catch (err) {
-    return fail(err.message);
+    return fail(redactSecrets(err.message, key));
   }
 }
 

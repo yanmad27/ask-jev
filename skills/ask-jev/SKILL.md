@@ -1,13 +1,15 @@
 ---
 name: ask-jev
-description: Use whenever you are about to make a judgement call that isn't yours to invent — classify something, pick between a fixed set of options, answer a yes/no question, rate something on a scale, or decide which option the user would pick — and the answer follows from context you already have. Personal taste is answered by Jev only when grounded in the user's own words or past choices; irreversible actions always go to the user.
+description: Use whenever you are about to make an internal judgement call of your own — choose a model/tier, classify content, pick between fixed options, answer a yes/no on evidence — and the answer follows from context you already have. Jev advises; the user decides: anything the user would decide (taste, push/PR/merge/deploy, any external effect) goes through AskUserQuestion, never this CLI.
 ---
 
 # Ask Jev
 
 Jev (typesafe.ai) is a small, fast evaluation model: given evidence and a
 definition of what each answer means, it returns a calibrated probability —
-not text. Consult it instead of silently deciding or interrupting the user.
+not text. **Jev advises; the user decides.** This CLI is for your own
+internal judgements only; decisions that belong to the user go through
+AskUserQuestion, where Jev attaches its advice and the user chooses.
 
 ## Verify first
 
@@ -19,24 +21,47 @@ agent asked "did you make the GHCR package public?"; Jev picked "changed it
 now, recheck", but the package was still private (403 on an anonymous pull) —
 a plain anonymous pull would have answered it directly, no question needed.
 
-## When to ask
+## When to use the CLI
 
-Ask Jev when:
-- classifying content ("is this a bug report or a feature request")
-- picking between a fixed set of options where the right one follows from
-  evidence already in hand
+The CLI is for agent-internal judgements only: model/tier choice and internal classification.
+Use it when the right answer follows from evidence already in
+hand:
+- choosing a model or tier for a subtask ("haiku or sonnet for this
+  extraction?") from the task text and its constraints
+- classifying content ("is this a bug report or a feature request", "is this
+  log line an error or a warning")
 - a yes/no check with an observable answer ("does this diff touch auth code")
-- which option the user would pick, when they've deferred the choice
 
-Irreversible or destructive actions (delete, send, publish, spend money)
-always go straight to the user — never Jev, never you.
+How to act on the result:
+- confidence >= the threshold (`ASK_JEV_ASK_THRESHOLD`, default `0.8`): you may
+  act on it, and you must print `Jev chose "X" (0.93)`.
+- below the threshold: state your own manual choice as the fallback, say it is
+  your choice, and proceed with that.
 
-Personal taste and style are not automatically the user's alone: ask Jev
-which option the user would pick, grounding `state` in their own messages or
-real past choices (see Delegation below). Jev answers only when that
-grounding and the pick's confidence both clear the threshold; otherwise it
-defers, and the user decides. No evidence yet? Go get it first — Jev doesn't
-research, only judges what you hand it.
+## Never via the CLI
+
+Anything the user would decide goes through AskUserQuestion, where Jev
+attaches advice and the user decides — never through this CLI:
+- taste, style, tone, naming, wording, "which option would the user pick"
+- push, force-push, open/submit/close a PR, merge, deploy, release, publish
+- anything with an external effect: send/post/email/message, upload, invite,
+  purchase, delete, spend
+- judging your own output ("is my fix correct?") — verify it yourself
+- facts a read-only command can check — run it and use the verbatim output
+
+The CLI enforces this: it rejects (exit 2, no Jev call) state that is not
+evidence — your own description of the user, a taste question without the
+user's own words, an action the user decides, a judgement of your own output —
+and warns on checkable facts asked without command output, on evidence that
+repeats the question, on state prose describing the user's taste, and on option
+labels or criteria that name an action (release/deploy/merge, "push to origin")
+when you may only be classifying — those alone are a warning, but a
+permission-style question ("should I…?", "ok to…", "whether to…") over them, or
+an option like `merge_now`, is rejected. A question, focus or definition over
+4096 characters is rejected too (`oversized_text`); put bulk evidence in `state`. A rejection is final — there is no override. If you think
+it is a false positive, do not retry with disguised wording: make and state your
+own manual choice instead. Never put your own description of the user in `state`;
+only raw evidence: their messages, their files, their past decisions.
 
 ## How to build a good request
 
@@ -64,19 +89,12 @@ Every definition must be **observable** (checkable directly against `state`,
 not inferred) and **mutually exclusive** (no other option's definition could
 also be true at once).
 
-## Delegation: deciding as the user
-
-When the user defers a choice ("hỏi Jev", "tùy anh/chị", "làm đi", "you
-decide"), ask Jev **which option the user would choose** — never what their
-reply literally says. Real regression: asking "what does the user's reply
-say?" with an `undetermined` option whose example matched the reply verbatim
-scored `undetermined=1.00` — useless. Re-asked as "acting on the user's
-behalf, which option should be taken?", real options only plus a separate
-`confident` boolean, it scored `merge_now=0.98, confident=0.66` — usable.
+## Writing criteria
 
 Never add an `undetermined`/`unsure`/`other` bucket — criteria are only the
-real options. Add a separate boolean `confident` ("enough evidence to decide
-without the user? reversible/cosmetic needs less").
+real options. Real regression: a bucket whose example matched the evidence
+verbatim scored `undetermined=1.00`, useless. When a pick needs a "is this
+confident enough" signal, add a separate `confident` boolean.
 
 ## Examples
 
@@ -98,6 +116,24 @@ Yes/no:
 }
 ```
 
+Tier choice (agent-internal):
+
+```json
+{
+  "state": { "task": "Extract the invoice number and total from 40 short plain-text receipts." },
+  "questions": {
+    "tier": {
+      "type": "choice",
+      "instructions": { "question": "Which model tier suffices for `task`?" },
+      "criteria": {
+        "haiku": { "what": "Mechanical extraction or formatting with a fixed output shape", "not_for": "sonnet", "examples": ["pull fields from receipts"] },
+        "sonnet": { "what": "Multi-step reasoning, code changes, or ambiguous inputs", "not_for": "haiku", "examples": ["refactor a module"] }
+      }
+    }
+  }
+}
+```
+
 Choice — same shape, `criteria` keyed by option name instead of `true`/`false`:
 `"category": { "type": "choice", "criteria": { "bug": { "what": "...", "not_for": "feature_request, question", "examples": [...] }, "feature_request": {...}, "question": {...} } }`.
 
@@ -107,8 +143,11 @@ Choice — same shape, `criteria` keyed by option name instead of `true`/`false`
 echo '<json above>' | node "${CLAUDE_PLUGIN_ROOT}/bin/jev.mjs"
 ```
 
-Prints the raw `answers` object to stdout, or exits non-zero with a one-line
-stderr message (no key, malformed input, API error, timeout).
+Prints the raw `answers` object to stdout. Exit 1: usage or provider failure
+(no key, malformed input, API error, timeout). Exit 2: rejected as not
+evidence (see "Never via the CLI"); no provider call was made, and stderr
+names the class and what to do instead. Warnings go to stderr and into the log
+row; the call still proceeds.
 
 ## Reading the result
 
@@ -116,7 +155,7 @@ stderr message (no key, malformed input, API error, timeout).
 - `boolean`: `{ probability: 0.97, confidence: 0.95 }` — probability of "true".
 - `confidence` summarizes how concentrated the distribution is, not
   correctness — threshold on it (reuse `ASK_JEV_ASK_THRESHOLD`, default `0.8`);
-  below it, ask the user or gather more evidence instead of acting.
+  below it, make and state your own manual choice instead of acting on Jev's.
 
 ## Report the choice
 
@@ -131,7 +170,9 @@ in parentheses). For CLI calls you write this line yourself after reading
 - Two options whose definitions overlap or don't name each other in `not_for`.
 - Summarizing evidence into `state` instead of pasting it verbatim.
 - Bundling several independent judgements into one `question`.
-- An `undetermined`/`unsure`/`other` bucket instead of asking what the user
-  would pick (see Delegation).
+- An `undetermined`/`unsure`/`other` bucket.
+- Sending a user decision (taste, push/PR/merge/deploy, external effect) here
+  instead of AskUserQuestion.
+- Describing the user in `state` instead of quoting them.
 
 To see how often Jev is actually being consulted: `node "${CLAUDE_PLUGIN_ROOT}/bin/jev.mjs" stats`.

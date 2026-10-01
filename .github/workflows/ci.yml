@@ -15,7 +15,7 @@ jobs:
           node-version: 22
 
       - name: Syntax check
-        run: for f in hooks/*.mjs lib/*.mjs bin/*.mjs; do node --check "$f"; done
+        run: for f in hooks/*.mjs hooks/gates/*.mjs lib/*.mjs bin/*.mjs; do node --check "$f"; done
 
       - name: Manifest JSON validity
         run: node -e "['hooks/hooks.json','.claude-plugin/plugin.json','.claude-plugin/marketplace.json'].forEach(f=>JSON.parse(require('fs').readFileSync(f,'utf8')))"
@@ -23,10 +23,10 @@ jobs:
       - name: Unit tests
         run: node --test hooks/*.test.mjs
 
-      - name: Hook contract - missing description denies
+      - name: Hook contract - missing description never blocks
         run: |
           out=$(echo '{"tool_name":"AskUserQuestion","transcript_path":"/dev/null","tool_input":{"questions":[{"question":"Q?","options":[{"label":"A"},{"label":"B","description":"b"}]}]}}' | TYPESAFE_API_KEY=dummy node hooks/ask-jev.mjs)
-          echo "$out" | grep -q '"permissionDecision":"deny"'
+          [ -z "$out" ]
 
       - name: Hook contract - resolved context stays silent
         run: |

@@ -43,33 +43,22 @@ const askInput = {
   tool_input: { questions: [{ question: "Merge now?", options: [{ label: "yes", description: "merge now" }, { label: "no", description: "wait" }] }] },
 };
 
-test("ask-jev: personal falls back in safe; in full, only grounded personal answers get through", async () => {
-  const answers = () => ({ pick: { choice: "o0", probabilities: { o0: 0.95 } }, personal: { probability: 0.9 }, destructive: { probability: 0.1 } });
-  const safeServer = await dynamicStub(answers);
-  const safeOut = await run("ask-jev.mjs", askInput, `http://127.0.0.1:${safeServer.address().port}`, "safe");
-  safeServer.close();
-  assert.equal(safeOut, ""); // personal wins in safe → no answer
-
-  // full, but ungrounded (no real evidence backing the pick) → still deferred
-  const ungroundedServer = await dynamicStub(() => ({ ...answers(), grounded: { probability: 0.1 } }));
-  const ungroundedOut = await run("ask-jev.mjs", { ...askInput, session_id: `a-${Math.random()}` }, `http://127.0.0.1:${ungroundedServer.address().port}`, "full");
-  ungroundedServer.close();
-  assert.equal(ungroundedOut, ""); // a generic prior is not grounding → defer
-
-  // full, grounded in real user evidence and confident → answered
-  const groundedServer = await dynamicStub(() => ({ ...answers(), grounded: { probability: 0.95 } }));
-  const groundedOut = await run("ask-jev.mjs", { ...askInput, session_id: `a-${Math.random()}` }, `http://127.0.0.1:${groundedServer.address().port}`, "full");
-  groundedServer.close();
-  assert.match(groundedOut, /Jev chose/);
-});
-
-test("ask-jev: destructive (p=0.7) always hands to the user, both modes", async () => {
-  const answers = () => ({ pick: { choice: "o0", probabilities: { o0: 0.95 } }, personal: { probability: 0.1 }, destructive: { probability: 0.7 } });
+test("ask-jev (advisory): personal/destructive scores and autonomy mode never turn advice into an answer or a block", async () => {
+  const cases = [
+    { personal: 0.9, destructive: 0.1, grounded: 0.95 },
+    { personal: 0.9, destructive: 0.1, grounded: 0.1 },
+    { personal: 0.1, destructive: 0.7, grounded: 0.95 },
+  ];
   for (const mode of ["safe", "full"]) {
-    const server = await dynamicStub(answers);
-    const out = await run("ask-jev.mjs", { ...askInput, session_id: `a-${Math.random()}` }, `http://127.0.0.1:${server.address().port}`, mode);
-    server.close();
-    assert.equal(out, "");
+    for (const c of cases) {
+      const server = await dynamicStub(() => ({ pick: { choice: "o0", probabilities: { o0: 0.95 } }, personal: { probability: c.personal }, destructive: { probability: c.destructive }, grounded: { probability: c.grounded } }));
+      const out = await run("ask-jev.mjs", { ...askInput, session_id: `a-${Math.random()}`, tool_use_id: `toolu_${Math.random()}` }, `http://127.0.0.1:${server.address().port}`, mode);
+      server.close();
+      const parsed = JSON.parse(out);
+      assert.match(parsed.systemMessage, /^Jev đề xuất: "yes" \(#1\) \(0\.95\)/);
+      assert.equal(parsed.hookSpecificOutput.permissionDecision, "ask");
+      assert.doesNotMatch(out, /"permissionDecision":"(deny|allow)"|"answers"|"response"/);
+    }
   }
 });
 
