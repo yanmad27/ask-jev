@@ -60,6 +60,9 @@ function isDuplicate(input) {
 }
 
 const labelsOf = (options) => options.map((o) => o?.label);
+// Bằng đúng FIELD_CAP của logEvent: advice_text trong log phải y hệt dòng người dùng thấy, để ask-jev-answer.mjs
+// dựng lại được đúng văn bản câu hỏi đã chú thích.
+const ADVICE_LINE_CAP = 300;
 const fmtConf = (c) => Number(c).toFixed(2);
 
 /** "Jev đề xuất: X (0.86) — lý do" (chắc) hoặc "Jev nghiêng về: X (0.55) — lý do" (yếu). */
@@ -67,7 +70,8 @@ export function adviceLine(advice) {
   const picked = advice.recommended.length ? advice.recommended.map(clean).join(", ") : "không chọn option nào";
   const head = advice.strength === "strong" ? "Jev đề xuất" : "Jev nghiêng về";
   const reason = clean(advice.reason);
-  return `${head}: ${picked} (${fmtConf(advice.confidence)})${reason ? ` — ${reason}` : ""}`;
+  const line = `${head}: ${picked} (${fmtConf(advice.confidence)})${reason ? ` — ${reason}` : ""}`;
+  return line.length > ADVICE_LINE_CAP ? `${line.slice(0, ADVICE_LINE_CAP - 1)}…` : line;
 }
 
 /** Ghi chú khi không có đề xuất. `notice` = "billing" chỉ cho lần đầu trong phiên (claimBillingNote), sau đó generic. */
@@ -78,10 +82,17 @@ export function unavailableNote(errorClass, status, notice) {
 
 const reasonOf = (errorClass) => (errorClass === "billing" || errorClass === "timeout" ? errorClass : "provider_error");
 
+// updatedInput thay toàn bộ tool_input: mọi khóa kiểu "trả lời" (answers/response/annotations/…) từ input đến
+// — kể cả input thù địch — bị bỏ ở mọi cấp, để hook không bao giờ có thể trả lời thay người dùng.
+const ANSWERING_KEY = /answer|respon|annotation|^select|^choice|^chos|^result|^output/i;
+const dropAnswering = (obj) =>
+  obj && typeof obj === "object" && !Array.isArray(obj) ? Object.fromEntries(Object.entries(obj).filter(([k]) => !ANSWERING_KEY.test(k))) : obj;
+
 function annotateQuestions(toolInput, questions, advices, lines) {
   return {
-    ...toolInput,
-    questions: questions.map((q, i) => {
+    ...dropAnswering(toolInput),
+    questions: questions.map((raw, i) => {
+      const q = { ...dropAnswering(raw), options: (raw.options ?? []).map(dropAnswering) };
       const a = advices[i];
       if (a?.outcome !== "advised") return q;
       const recommended = new Set(a.recommended);

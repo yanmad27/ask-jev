@@ -694,3 +694,54 @@ test("advisory: no auto-answer path is left in the AskUserQuestion hooks", () =>
     assert.doesNotMatch(src, /\banswers\s*:/, f);
   }
 });
+
+test("advisory (hostile input): incoming answers/response/annotations never survive into stdout — every channel and path", async () => {
+  const hostile = (questions) => {
+    const i = hookInput(questions);
+    Object.assign(i.tool_input, { answers: { "Stack?": "A" }, response: "PWNED", annotations: { x: 1 }, selected: "A" });
+    i.tool_input.questions.forEach((q) => Object.assign(q, { answer: "A", answers: ["A"], response: "PWNED", selected: "A" }));
+    i.tool_input.questions.forEach((q) => q.options.forEach((o) => Object.assign(o, { selected: true, answer: "A" })));
+    return i;
+  };
+  const ok = await provider500Stub(() => adviceAnswers(0.9));
+  const fail = await provider500Stub(() => ({ status: 401 }));
+  const paths = [
+    ["annotate success", ok.url, { ASK_JEV_ADVICE_CHANNEL: "annotate" }, [{ question: "Stack?", multiSelect: true, options: advOpts }, { question: "Two?", options: advOpts }], true],
+    ["message success", ok.url, {}, [{ question: "Stack?", options: advOpts }], false],
+    ["annotate failure", fail.url, { ASK_JEV_ADVICE_CHANNEL: "annotate" }, [{ question: "Stack?", options: advOpts }], false],
+    ["annotate missing definition", ok.url, { ASK_JEV_ADVICE_CHANNEL: "annotate" }, [{ question: "Stack?", options: [{ label: "A" }, { label: "B" }] }], false],
+    ["annotate single option", ok.url, { ASK_JEV_ADVICE_CHANNEL: "annotate" }, [{ question: "Stack?", options: [{ label: "A", description: "a" }] }], false],
+  ];
+  for (const [name, url, env, questions, annotated] of paths) {
+    const r = await runAdvisory(hostile(questions), url, { env });
+    ok.hits.n = 0;
+    assertNeverAnswers(r.stdout);
+    assert.doesNotMatch(r.stdout, /PWNED|"annotations"|"selected"|"answer"/, name);
+    if (annotated) {
+      const updated = r.json.hookSpecificOutput.updatedInput;
+      assert.deepEqual(Object.keys(updated), ["questions"], name);
+      for (const q of updated.questions) {
+        assert.deepEqual(Object.keys(q).sort(), ["multiSelect", "options", "question"].filter((k) => k in q || k !== "multiSelect"), name);
+        for (const o of q.options) assert.deepEqual(Object.keys(o).sort(), ["description", "label"], name);
+      }
+      assert.equal(updated.questions[0].multiSelect, true);
+    }
+  }
+  ok.close();
+  fail.close();
+});
+
+test("advisory ↔ outcome round trip: the annotated questions the hook emits are matched exactly by the PostToolUse hook", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers(0.9));
+  const input = hookInput([{ question: "Pick", options: advOpts }, { question: "Pick\nmore", options: advOpts }]);
+  const r = await runAdvisory(input, stub1.url, { env: { ASK_JEV_ADVICE_CHANNEL: "annotate" } });
+  stub1.close();
+  const annotated = r.json.hookSpecificOutput.updatedInput;
+  const pair = (q, a) => `"${q.question.replace(/"/g, '\\"')}"="${a}"`;
+  const response = `Your questions have been answered: ${pair(annotated.questions[0], "A")}, ${pair(annotated.questions[1], "B")}. You can now continue with these answers in mind.`;
+  const child = execFileAsync("node", ["hooks/ask-jev-answer.mjs"], { env: { ...cleanEnv(), ASK_JEV_API_KEY: "vck_dummy", ASK_JEV_LOG_FILE: r.log, HOME: dirname(r.log) }, encoding: "utf8" });
+  child.child.stdin.end(JSON.stringify({ tool_name: "AskUserQuestion", session_id: input.session_id, tool_use_id: input.tool_use_id, cwd: "/repo", tool_input: annotated, tool_response: response }));
+  await child;
+  const outs = readFileSync(r.log, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "outcome");
+  assert.deepEqual(outs.map((o) => [o.question_index, o.question, o.chosen, o.agreement]), [[0, "Pick", ["A"], "agree"], [1, "Pick\nmore", ["B"], "disagree"]]);
+});

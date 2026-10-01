@@ -23,7 +23,7 @@ function seedAdvice(logFile, toolUseId, rows) {
   }));
   writeFileSync(logFile, lines.join("\n") + "\n");
 }
-const advised = (recommended, confidence = 0.86) => ({ outcome: "advised", recommended, confidence, strength: "strong" });
+const advised = (recommended, confidence = 0.86) => ({ outcome: "advised", recommended, confidence, strength: "strong", advice_text: `Jev đề xuất: ${recommended.join(", ")} (${confidence.toFixed(2)}) — b` });
 
 async function runAnswerHook(toolResponse, logFile, extra = {}) {
   const script = join(repoRoot, "hooks", "ask-jev-answer.mjs");
@@ -181,4 +181,68 @@ test("answer hook is silent without an API key and never emits a decision on std
   const { stdout } = await child;
   assert.equal(stdout, "");
   assert.equal(outcomes(log).length, 0);
+});
+
+test("outcome: 3 questions, only 2 parse → the third gets an indexed unparsed outcome with its recommendation", async () => {
+  const log = tmpLog();
+  seedAdvice(log, "toolu_1", [{ question: "One?", advice: advised(["Blue"]) }, { question: "Two?", advice: advised(["Red"], 0.7) }, { question: "Three?", advice: advised(["Green"], 0.6) }]);
+  await runAnswerHook(answered(["One?", "Blue"], ["Three?", "Red"]), log, { tool_input: toolInput({ question: "One?" }, { question: "Two?" }, { question: "Three?" }) });
+  const rows = outcomes(log);
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows.map((o) => [o.question_index, o.question, o.kind_of_answer]), [[0, "One?", "option"], [1, "Two?", "unparsed"], [2, "Three?", "option"]]);
+  assert.deepEqual(rows[1].recommended, ["Red"]);
+  assert.equal(rows[1].recommended_confidence, 0.7);
+  assert.deepEqual(rows[1].options, ["Blue", "Red", "Green"]);
+  assert.deepEqual(rows.map((o) => o.agreement), ["agree", "unparsed", "disagree"]);
+});
+
+test("outcome: a fully unfamiliar response for 3 advised questions → 3 linked unparsed outcomes carrying recommendations", async () => {
+  const log = tmpLog();
+  seedAdvice(log, "toolu_1", [{ question: "One?", advice: advised(["Blue"]) }, { question: "Two?", advice: advised(["Red"], 0.7) }, { question: "Three?", advice: advised(["Green"], 0.6) }]);
+  await runAnswerHook("Totally new Claude Code wording", log, { tool_input: toolInput({ question: "One?" }, { question: "Two?" }, { question: "Three?" }) });
+  const rows = outcomes(log);
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows.map((o) => o.question_index), [0, 1, 2]);
+  assert.deepEqual(rows.map((o) => o.question), ["One?", "Two?", "Three?"]);
+  assert.deepEqual(rows.map((o) => o.recommended), [["Blue"], ["Red"], ["Green"]]);
+  assert.deepEqual(rows.map((o) => o.recommended_confidence), [0.86, 0.7, 0.6]);
+  assert.ok(rows.every((o) => o.kind_of_answer === "unparsed" && o.invocation_id === "toolu_1" && o.advice_shown === true));
+});
+
+test("outcome: unparsed with no advice rows falls back to tool_input.questions for the expected indexes", async () => {
+  const log = tmpLog();
+  await runAnswerHook("nope", log, { tool_input: toolInput({ question: "A?" }, { question: "B?" }) });
+  const rows = outcomes(log);
+  assert.deepEqual(rows.map((o) => [o.question_index, o.question, o.recommended]), [[0, "A?", null], [1, "B?", null]]);
+});
+
+test("outcome: matching is by exact key — 'Pick' vs 'Pick\\nmore' never cross-attribute, annotated or not, and the original question is logged", async () => {
+  const log = tmpLog();
+  seedAdvice(log, "toolu_1", [{ question: "Pick", advice: advised(["Blue"]) }, { question: "Pick\nmore", advice: advised(["Red"], 0.7) }]);
+  const a0 = "Pick\n\n[1/2] Jev đề xuất: Blue (0.86) — b";
+  const a1 = "Pick\nmore\n\n[2/2] Jev đề xuất: Red (0.70) — b";
+  for (const [ti, resp] of [
+    [toolInput({ question: "Pick" }, { question: "Pick\nmore" }), answered(["Pick", "Blue"], ["Pick\nmore", "Green"])],
+    [toolInput({ question: a0 }, { question: a1 }), answered([a0, "Blue"], [a1, "Green"])],
+    [undefined, answered([a0, "Blue"], [a1, "Green"])],
+  ]) {
+    await runAnswerHook(resp, log, ti ? { tool_input: ti } : {});
+  }
+  const rows = outcomes(log);
+  assert.equal(rows.length, 6);
+  for (let k = 0; k < 6; k += 2) {
+    assert.deepEqual([rows[k].question_index, rows[k].question, rows[k].chosen, rows[k].agreement], [0, "Pick", ["Blue"], "agree"]);
+    assert.deepEqual([rows[k + 1].question_index, rows[k + 1].question, rows[k + 1].chosen, rows[k + 1].agreement], [1, "Pick\nmore", ["Green"], "disagree"]);
+  }
+});
+
+test("outcome: an answer key that is only a prefix-extension of a question is NOT attributed to it", async () => {
+  const log = tmpLog();
+  seedAdvice(log, "toolu_1", [{ question: "Pick", advice: advised(["Blue"]) }]);
+  await runAnswerHook(answered(["Pick\nsomething else", "Red"]), log, { tool_input: toolInput({ question: "Pick" }) });
+  const rows = outcomes(log);
+  assert.equal(rows.length, 2);
+  assert.deepEqual([rows[0].question_index, rows[0].kind_of_answer], [0, "unparsed"]);
+  assert.equal(rows[1].question_index, undefined);
+  assert.equal(rows[1].agreement, "no_advice");
 });
