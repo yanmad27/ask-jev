@@ -25,9 +25,9 @@ dòng của Jev được nối vào nội dung câu hỏi (xem
 
 ```
 "Dùng thư viện nào để parse ngày?"     → Jev đề xuất: date-fns (1.00) — đã có trong package.json
-"Đóng gói thành plugin hay skill?"     → Jev đề xuất: Plugin (0.95)
-"Bạn muốn giao diện tông màu nào?"     → Jev nghiêng về: Teal (0.55) — no direct statement from you — a guess
-"Có xoá luôn 3 environment cũ không?"  → Jev đề xuất: Giữ lại (0.88) — và bạn vẫn là người quyết
+"Đóng gói thành plugin hay skill?"     → Jev đề xuất: "Plugin" (#1) (0.95)
+"Bạn muốn giao diện tông màu nào?"     → Jev nghiêng về: "Teal" (#2) (0.55) — [no direct statement from you — a guess]
+"Có xoá luôn 3 environment cũ không?"  → Jev đề xuất: "Giữ lại" (#2) (0.88) — và bạn vẫn là người quyết
 ```
 
 (Dòng đề xuất mà hook của Claude Code hiển thị bằng tiếng Việt: `đề xuất` =
@@ -68,18 +68,22 @@ Khi Claude hỏi bạn một câu, ask-jev thêm một dòng đề xuất cho m�
 vào session:
 
 ```
-Jev đề xuất: Plugin (0.95) — A packaged bundle of hooks, skills and commands [grounded in your messages/past choices]
-Jev nghiêng về: Teal (0.55) — A calm blue-green accent [no direct statement from you — a guess]
+Jev đề xuất: "Plugin" (#1) (0.95) — [grounded in your messages/past choices]
+Jev nghiêng về: "Teal" (#2) (0.55) — [no direct statement from you — a guess]
 ```
 
-- **`Jev đề xuất: X (0.86) — <reason>`** — độ tin của Jev vào `X` bằng hoặc
+- **`Jev đề xuất: "X" (#n) (0.86) — <reason>`** — độ tin của Jev vào `X` bằng hoặc
   cao hơn `ASK_JEV_ASK_THRESHOLD` (mặc định `0.8`).
-- **`Jev nghiêng về: X (0.55) — <reason>`** — đề xuất yếu: dưới ngưỡng đó.
+- **`Jev nghiêng về: "X" (#n) (0.55) — <reason>`** — đề xuất yếu: dưới ngưỡng đó.
+- **`X` là nhãn của option, đặt trong dấu ngoặc kép và cắt tối đa 40 ký tự**, kèm
+  số thứ tự option `#n` — nhãn do agent viết nên chỉ dạng ngắn, có đánh số mới vào
+  dòng của Jev. Mô tả đầy đủ của option vẫn hiện ngay trên option.
 - **`<reason>` không phải lời giải thích của Jev** — classifier chỉ trả về
-  xác suất, không trả về chữ. Đó là mô tả của chính option được đề xuất, cộng
-  một tag cho biết lời của bạn hoặc lựa chọn trong quá khứ có làm căn cứ cho
-  pick hay không (`grounded in your messages/past choices`) hay chỉ là đoán
-  (`no direct statement from you — a guess`). Tối đa 160 ký tự.
+  xác suất, không trả về chữ. Đó là một thẻ do chính plugin sinh ra: lời của bạn
+  hoặc lựa chọn trong quá khứ có làm căn cứ cho pick
+  (`[grounded in your messages/past choices]`), hay chỉ là đoán
+  (`[no direct statement from you — a guess]`), hay thiếu điểm grounded
+  (`[grounding unavailable]`). Không chép chữ nào do agent viết vào đó.
 - **Nếu Jev lỗi** (lỗi provider, timeout, hết credits) câu hỏi vẫn
   tới tay bạn, kèm một ghi chú được nối vào giống như đề xuất: `Jev: không có đề xuất (lỗi <status>) — bạn tự quyết`.
   Lỗi billing / HTTP 402 nói `hết credits — credits exhausted` đúng một lần
@@ -139,8 +143,8 @@ Dòng đề xuất có dạng `Jev đề xuất: <option> (<độ tin>) — <th�
 (`Jev nghiêng về:` khi độ tin dưới ngưỡng). "Lý do" một dòng là một **thẻ grounded** do
 chính plugin sinh ra — lựa chọn có dựa trên lời bạn nói hay lựa chọn trước đây của bạn không —
 và không bao giờ là văn bản chép từ mô tả option của agent (mô tả vẫn hiện ngay trên option),
-nên agent không thể giả dòng của Jev. Nếu câu hỏi, header, nhãn hay mô tả do agent viết đã chứa
-dấu hiệu của Jev, hook không chú thích gì: nó quay về kênh `message` và ghi một diagnostic
+nên plugin không bao giờ chép mô tả do agent viết vào dòng của Jev. Nếu câu hỏi, header, nhãn hay mô tả do agent viết đã chứa
+dấu hiệu của Jev, hook không chú thích gì: nó quay về kênh `message` (best effort) và ghi một diagnostic
 `jev_marker_in_agent_text`.
 
 **Đề xuất tới tay bạn thế nào** là một cài đặt, `ASK_JEV_ADVICE_CHANNEL`:

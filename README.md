@@ -25,9 +25,9 @@ and their labels intact. By default Jev's line is appended to the question text
 
 ```
 "Which date library should we use?"        → Jev đề xuất: date-fns (1.00) — already in package.json
-"Package this as a plugin or a skill?"     → Jev đề xuất: Plugin (0.95)
-"Which colour palette do you want?"        → Jev nghiêng về: Teal (0.55) — no direct statement from you — a guess
-"Delete the three stale environments?"     → Jev đề xuất: Keep them (0.88) — and you still decide
+"Package this as a plugin or a skill?"     → Jev đề xuất: "Plugin" (#1) (0.95)
+"Which colour palette do you want?"        → Jev nghiêng về: "Teal" (#2) (0.55) — [no direct statement from you — a guess]
+"Delete the three stale environments?"     → Jev đề xuất: "Keep them" (#2) (0.88) — and you still decide
 ```
 
 (The one-line advice the Claude Code hook shows is in Vietnamese —
@@ -68,18 +68,23 @@ When Claude asks you a question, ask-jev adds one line of advice per question
 to the session, in the question's own wording:
 
 ```
-Jev đề xuất: Plugin (0.95) — A packaged bundle of hooks, skills and commands [grounded in your messages/past choices]
-Jev nghiêng về: Teal (0.55) — A calm blue-green accent [no direct statement from you — a guess]
+Jev đề xuất: "Plugin" (#1) (0.95) — [grounded in your messages/past choices]
+Jev nghiêng về: "Teal" (#2) (0.55) — [no direct statement from you — a guess]
 ```
 
-- **`Jev đề xuất: X (0.86) — <reason>`** — Jev's confidence in `X` is at or
+- **`Jev đề xuất: "X" (#n) (0.86) — <reason>`** — Jev's confidence in `X` is at or
   above `ASK_JEV_ASK_THRESHOLD` (default `0.8`).
-- **`Jev nghiêng về: X (0.55) — <reason>`** — weak advice: below the threshold.
+- **`Jev nghiêng về: "X" (#n) (0.55) — <reason>`** — weak advice: below the threshold.
+- **`X` is the option's label, shown in quotes and capped at 40 characters**,
+  followed by its option number `#n` — the label is agent-written, so only a
+  short, numbered form goes into Jev's line. The option's full description stays
+  visible on the option itself.
 - **`<reason>` is not Jev's own explanation** — the classifier returns
-  probabilities, not prose. It is the recommended option's own description,
-  plus a tag saying whether your messages or past choices ground the pick
-  (`grounded in your messages/past choices`) or it is a guess
-  (`no direct statement from you — a guess`). It is capped at 160 characters.
+  probabilities, not prose. It is a tag the plugin generates itself: whether
+  your messages or past choices ground the pick
+  (`[grounded in your messages/past choices]`), it is a guess
+  (`[no direct statement from you — a guess]`), or the grounding score was
+  missing (`[grounding unavailable]`). No agent-written text is copied into it.
 - **If Jev fails** (provider error, timeout, out of credits) the question
   still reaches you, with a note appended the same way as advice: `Jev: không có đề xuất (lỗi <status>) — bạn tự quyết`
   ("no advice — you decide"). A billing / HTTP 402 failure says
@@ -137,9 +142,9 @@ The advice line is `Jev đề xuất: <option> (<confidence>) — <grounded tag>
 (`Jev nghiêng về:` when confidence is below the threshold). The one-line reason
 is a **grounded tag** the plugin generates itself — whether your own words or past choices back the pick —
 and never text copied from the agent's option description (the description stays
-visible on the option), so an agent cannot forge Jev's line. If the agent's own
+visible on the option), so the plugin never copies agent-written descriptions into Jev's line. If the agent's own
 question, header, labels or descriptions already contain Jev's markers, the hook does not
-annotate at all: it falls back to the `message` channel and logs a
+annotate at all: it falls back to the `message` channel (best effort) and logs a
 `jev_marker_in_agent_text` diagnostic.
 
 **How the advice reaches you** is a setting, `ASK_JEV_ADVICE_CHANNEL`:
