@@ -444,3 +444,22 @@ test("redaction runs on the full body before truncation; Basic/bare token/short 
   assert.equal(redactSecrets("a ".repeat(500)).length, 999, "uncapped: caller decides the cut");
   assert.ok(!redactSecrets("clone https://u:p@h.example/r?t=1 failed").match(/u:p|t=1/));
 });
+
+test("caps: question_name ≤120, warnings ≤20 entries with path/message ≤300, bare-string/object chosen capped", () => {
+  const path = newLog();
+  const big = "Z".repeat(5_000);
+  const warnings = Array.from({ length: 40 }, () => ({ class: "c".repeat(500), path: big, message: big }));
+  return withEnv({ ASK_JEV_LOG_FILE: path }, async () => {
+    logEvent({ kind: "decision", source: "cli", gate: "cli", question_name: big, warnings });
+    logEvent({ kind: "outcome", source: "hook", chosen: big, recommended: big, options: big });
+    logEvent({ kind: "outcome", source: "hook", chosen: { a: big }, question_name: "short", warnings: "x".repeat(900) });
+    const [a, b, c] = rows(path);
+    assert.ok(a.question_name.length <= 120);
+    assert.equal(a.warnings.length, 20);
+    for (const w of a.warnings) for (const [k, cap] of [["path", 300], ["message", 300], ["class", 40]]) assert.ok(w[k].length <= cap, `${k} ${w[k].length}`);
+    for (const k of ["chosen", "recommended", "options"]) assert.ok(typeof b[k] === "string" && b[k].length <= 300, k);
+    assert.ok(typeof c.chosen === "string" && c.chosen.length <= 300);
+    assert.equal(c.question_name, "short");
+    assert.ok(c.warnings.length <= 300);
+  });
+});
