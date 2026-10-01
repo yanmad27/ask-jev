@@ -167,26 +167,22 @@ test("lib/stats.mjs: diagnostics (e.g. Paseo standdown) are excluded from decisi
   assert.equal(s.decisions.by_outcome.paseo_standdown, undefined);
 });
 
-test("lib/stats.mjs: CLI decisions are visible in by_gate but excluded from the overall total/by_outcome/rates", () => {
+test("lib/stats.mjs: CLI decisions count in totals; acted when confidence >= threshold, fallback below", () => {
   const events = [
     { kind: "decision", gate: "ask", outcome: "answered" },
     { kind: "decision", gate: "ask", outcome: "personal" },
-    { kind: "decision", gate: "cli", outcome: "true" },
-    { kind: "decision", gate: "cli", outcome: "a" },
+    { kind: "decision", gate: "cli", outcome: "true", confidence: 0.95, threshold: 0.8 },
+    { kind: "decision", gate: "cli", outcome: "a", confidence: 0.5, threshold: 0.8 },
   ];
   const s = computeStats(events);
-  // overall total/by_outcome only count the ask decisions — cli isn't a "hỏi hộ" funnel gate
-  assert.equal(s.decisions.total, 2);
-  assert.deepEqual(s.decisions.by_outcome, { answered: 1, personal: 1 });
-  assert.equal(s.decisions.by_outcome.true, undefined);
-  assert.equal(s.decisions.by_outcome.a, undefined);
-  // percentages are computed over the 2 ask decisions, not diluted by the 2 cli ones
+  assert.equal(s.decisions.total, 4);
+  assert.deepEqual(s.decisions.by_outcome, { answered: 1, personal: 1, true: 1, a: 1 });
   assert.equal(s.decisions.positive_pct, 50);
   assert.equal(s.decisions.fallback_pct, 50);
-
-  // cli still shows up in by_gate with its own count and outcomes
+  assert.equal(s.fallbacks, 2);
   assert.deepEqual(s.decisions.by_gate.ask, { total: 2, positive: 1, by_outcome: { answered: 1, personal: 1 } });
-  assert.deepEqual(s.decisions.by_gate.cli, { total: 2, positive: 0, by_outcome: { true: 1, a: 1 } });
+  assert.deepEqual(s.decisions.by_gate.cli, { total: 2, positive: 1, by_outcome: { true: 1, a: 1 } });
+  assert.equal(s.decisions.by_source.cli.decisions, 2);
 });
 
 test("lib/jev.mjs: askJev retries 5xx until success within budget, logs retried + attempts", async () => {
