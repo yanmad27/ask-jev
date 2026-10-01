@@ -13,6 +13,9 @@
  *                         (S0, Claude Code 2.1.284): systemMessage chỉ hiện trong transcript sau khi đã trả lời.
  *   message             — chỉ `{"systemMessage": ...}` ở top-level; câu hỏi đi nguyên vẹn.
  *
+ * annotate chỉ chạy ở permission_mode default/acceptEdits/plan (hoặc không có); chế độ khác, hoặc văn bản agent chứa dấu hiệu của Jev,
+ * thì dùng message. ASK_JEV_FORCE_ANNOTATE=1 là công tắc CHỈ DÙNG ĐỂ KIỂM THỬ (annotate bất kể permission_mode; không có trong README).
+ *
  * Im lặng (không note) khi: không có API key, chưa có ngữ cảnh, câu hỏi một option, option thiếu mô tả —
  * hai trường hợp cuối vẫn ghi dòng advice_unavailable{single_option|missing_definition}.
  *
@@ -67,11 +70,20 @@ const labelsOf = (options) => options.map((o) => o?.label);
 const ADVICE_LINE_CAP = 300;
 const fmtConf = (c) => Number(c).toFixed(2);
 
-/** "Jev đề xuất: X (0.86) — lý do" (chắc) hoặc "Jev nghiêng về: X (0.55) — lý do" (yếu). */
+/**
+ * "Lý do" một dòng do CODE sinh ra từ `grounded`, không bao giờ chứa văn bản do agent viết (mô tả option vẫn hiện ngay
+ * trên option) — agent không thể giả dòng của Jev bằng cách nhét chữ vào mô tả.
+ */
+export function groundedTag(grounded) {
+  if (typeof grounded !== "number") return "";
+  return grounded >= 0.5 ? "[grounded in your messages/past choices]" : "[no direct statement from you — a guess]";
+}
+
+/** "Jev đề xuất: X (0.86) — [grounded …]" (chắc) hoặc "Jev nghiêng về: X (0.55) — [grounded …]" (yếu). */
 export function adviceLine(advice) {
   const picked = advice.recommended.length ? advice.recommended.map(clean).join(", ") : "không chọn option nào";
   const head = advice.strength === "strong" ? "Jev đề xuất" : "Jev nghiêng về";
-  const reason = clean(advice.reason);
+  const reason = groundedTag(advice.grounded);
   const line = `${head}: ${picked} (${fmtConf(advice.confidence)})${reason ? ` — ${reason}` : ""}`;
   return line.length > ADVICE_LINE_CAP ? `${line.slice(0, ADVICE_LINE_CAP - 1)}…` : line;
 }
@@ -84,17 +96,15 @@ export function unavailableNote(errorClass, status, notice) {
 
 const reasonOf = (errorClass) => (errorClass === "billing" || errorClass === "timeout" ? errorClass : "provider_error");
 
-// updatedInput thay toàn bộ tool_input: mọi khóa kiểu "trả lời" (answers/response/annotations/…) từ input đến
-// — kể cả input thù địch — bị bỏ ở mọi cấp, để hook không bao giờ có thể trả lời thay người dùng.
-const ANSWERING_KEY = /answer|respon|annotation|^select|^choice|^chos|^result|^output/i;
-const dropAnswering = (obj) =>
-  obj && typeof obj === "object" && !Array.isArray(obj) ? Object.fromEntries(Object.entries(obj).filter(([k]) => !ANSWERING_KEY.test(k))) : obj;
+// updatedInput thay toàn bộ tool_input, nên chỉ ALLOWLIST: `questions` ở top-level; mỗi câu chỉ question/header/multiSelect/options;
+// mỗi option chỉ label/description/preview. Mọi khóa khác (answers/response/annotations/picked/… — kể cả input thù địch) bị bỏ,
+// nên hook không thể trả lời thay người dùng.
+const pick = (obj, keys) => Object.fromEntries(keys.filter((k) => obj && Object.hasOwn(obj, k)).map((k) => [k, obj[k]]));
 
-function annotateQuestions(toolInput, questions, advices, texts) {
+function annotateQuestions(questions, advices, texts) {
   return {
-    ...dropAnswering(toolInput),
     questions: questions.map((raw, i) => {
-      const q = { ...dropAnswering(raw), options: (raw.options ?? []).map(dropAnswering) };
+      const q = { ...pick(raw, ["question", "header", "multiSelect"]), options: (raw.options ?? []).map((o) => pick(o, ["label", "description", "preview"])) };
       const a = advices[i];
       if (!texts[i]) return q;
       if (a?.outcome !== "advised") return { ...q, question: `${q.question}\n\n${texts[i]}` };
@@ -102,14 +112,35 @@ function annotateQuestions(toolInput, questions, advices, texts) {
       return {
         ...q,
         question: `${q.question}\n\n${texts[i]}`,
-        options: (q.options ?? []).map((o) => (recommended.has(o.label) ? { ...o, description: `${o.description} (Jev đề xuất)` } : o)),
+        options: q.options.map((o) => (recommended.has(o.label) ? { ...o, description: `${o.description} (Jev đề xuất)` } : o)),
       };
     }),
   };
 }
 
+// Kênh annotate (ask + updatedInput) chỉ được xác minh ở chế độ quyền mặc định; chế độ khác (bypassPermissions, dontAsk, …) dùng message.
+// ASK_JEV_FORCE_ANNOTATE=1 là công tắc CHỈ DÙNG ĐỂ KIỂM THỬ (không có trong README): annotate bất kể permission_mode, để chạy thật
+// xem ask+updatedInput có hiện hộp thoại ở bypassPermissions không.
+const ANNOTATE_MODES = new Set(["default", "acceptEdits", "plan"]);
+const JEV_MARKERS = ["jev đề xuất", "jev nghiêng về", "jev: không có đề xuất", "[grounded in", "[no direct statement"];
+
+/** Văn bản agent đã chứa dấu hiệu của Jev (giả dòng tư vấn): không chú thích, để người phân biệt được văn bản hook với văn bản agent. */
+export function hasJevMarker(questions) {
+  const strings = [];
+  for (const q of questions) {
+    strings.push(q?.question, q?.header);
+    for (const o of q?.options ?? []) strings.push(o?.label, o?.description, o?.preview);
+  }
+  return strings.some((t) => typeof t === "string" && JEV_MARKERS.some((m) => t.toLowerCase().includes(m)));
+}
+
 async function advise(input, questions, key) {
-  const channel = adviceChannel();
+  let channel = adviceChannel();
+  if (channel === "annotate" && input.permission_mode !== undefined && !ANNOTATE_MODES.has(input.permission_mode) && env("FORCE_ANNOTATE") !== "1") channel = "message";
+  if (channel === "annotate" && hasJevMarker(questions)) {
+    channel = "message";
+    logEvent({ kind: "diagnostic", source: "hook", gate: "ask", outcome: "jev_marker_in_agent_text" });
+  }
   const { state, sizes } = buildState({ transcriptPath: input.transcript_path ?? "", cwd: input.cwd, sessionId: input.session_id });
   const row = (i, q, outcome, extra = {}) =>
     logEvent({
@@ -168,7 +199,7 @@ async function advise(input, questions, key) {
     if (a.outcome === "advised") {
       row(i, q, "advised", {
         recommended: a.recommended, confidence: a.confidence, strength: a.strength, grounded: a.grounded,
-        reason: a.reason, advice_text: lines[i], display,
+        reason: groundedTag(a.grounded), advice_text: lines[i], display,
       });
       return;
     }
@@ -189,7 +220,7 @@ async function advise(input, questions, key) {
     out.hookSpecificOutput = {
       hookEventName: "PreToolUse",
       permissionDecision: "ask",
-      updatedInput: annotateQuestions(input.tool_input, questions, advices, texts),
+      updatedInput: annotateQuestions(questions, advices, texts),
     };
   }
   if (Object.keys(out).length > 0) process.stdout.write(JSON.stringify(out));

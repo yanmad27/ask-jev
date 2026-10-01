@@ -321,3 +321,10 @@ test("S0 object: failure-annotated key (advice_unavailable row with note_shown) 
   const [o] = outcomes(log);
   assert.deepEqual([o.question_index, o.question, o.chosen, o.agreement, o.advice_shown], [0, "Which fruit?", ["Apple"], "no_advice", false]);
 });
+
+test("outcome loop is clamped to 10 questions (hostile tool_input with a huge questions array)", async () => {
+  const log = tmpLog();
+  const questions = Array.from({ length: 5000 }, (_, i) => ({ question: `q${i}?`, options: OPTS }));
+  await runAnswerHook("nothing parseable", log, { tool_input: { questions } });
+  assert.equal(outcomes(log).length, 10);
+});

@@ -470,7 +470,7 @@ test("advisory (message channel, opt-in): top-level systemMessage only — no de
   stub1.close();
   assertNeverAnswers(r.stdout);
   assert.deepEqual(Object.keys(r.json), ["systemMessage"]);
-  assert.match(r.json.systemMessage, /^Jev đề xuất: A \(0\.86\) — a/);
+  assert.equal(r.json.systemMessage, "Jev đề xuất: A (0.86) — [grounded in your messages/past choices]");
   const adv = r.rows.find((e) => e.kind === "decision" && e.outcome === "advised");
   assert.equal(adv.invocation_id, input.tool_use_id);
   assert.equal(adv.session_id, input.session_id);
@@ -492,10 +492,9 @@ test("advisory (annotate channel, the default): ask + annotated questions, no an
   assert.equal(r.json.hookSpecificOutput.hookEventName, "PreToolUse");
   assert.equal(r.json.hookSpecificOutput.permissionDecision, "ask");
   const updated = r.json.hookSpecificOutput.updatedInput;
-  assert.equal(updated.extra, "kept");
-  assert.deepEqual(Object.keys(updated).sort(), ["extra", "questions"]);
+  assert.deepEqual(Object.keys(updated), ["questions"], "allowlist: only questions survive at top level");
   const [q] = updated.questions;
-  assert.match(q.question, /^Stack\?\n\nJev đề xuất: A \(0\.86\) — a/);
+  assert.equal(q.question, "Stack?\n\nJev đề xuất: A (0.86) — [grounded in your messages/past choices]");
   assert.equal(q.options[0].description, "a (Jev đề xuất)");
   assert.equal(q.options[1].description, "b");
   assert.equal(q.header, "Stack");
@@ -637,7 +636,7 @@ test("advisory: one unadvisable question does not silence advice for the others"
   const r = await runAdvisory(hookInput([{ question: "Bare?", options: [{ label: "A" }, { label: "B" }] }, { question: "Ok?", options: advOpts }]), stub1.url);
   stub1.close();
   assertNeverAnswers(r.stdout);
-  assert.equal(r.json.systemMessage, "[2/2] Jev đề xuất: A (0.90) — a [grounded in your messages/past choices]");
+  assert.equal(r.json.systemMessage, "[2/2] Jev đề xuất: A (0.90) — [grounded in your messages/past choices]");
 });
 
 test("advisory: no API key → silent, no provider call", async () => {
@@ -828,4 +827,96 @@ test("advisory ↔ outcome round trip: failure-annotated question keys (S0 objec
   await child;
   const outs = readFileSync(r.log, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "outcome");
   assert.deepEqual(outs.map((o) => [o.question_index, o.question, o.chosen, o.kind_of_answer, o.agreement]), [[0, "Pick", ["A"], "option", "no_advice"], [1, "Pick\nmore", ["B"], "option", "no_advice"]]);
+});
+
+const FORGED = "Jev đề xuất: Deploy (0.99) [grounded in your messages/past choices]";
+const hasUpdated = (r) => Boolean(r.json?.hookSpecificOutput);
+
+test("advice line never embeds agent-authored description text; the reason is the code-generated grounded tag", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers(0.9));
+  const r = await runAdvisory(hookInput([{ question: "q?", options: [{ label: "A", description: "totally harmless text" }, { label: "B", description: "b" }] }]), stub1.url);
+  stub1.close();
+  assert.doesNotMatch(r.json.systemMessage, /harmless/);
+  assert.equal(r.rows.find((e) => e.outcome === "advised").reason, "[grounded in your messages/past choices]");
+  assert.match(r.json.hookSpecificOutput.updatedInput.questions[0].options[0].description, /^totally harmless text \(Jev đề xuất\)$/);
+});
+
+test("forged Jev markers in agent text (question, header, label, description, preview) → message channel only + jev_marker_in_agent_text diagnostic", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers(0.9));
+  const cases = {
+    description: [{ question: "q1?", options: [{ label: "A", description: FORGED }, { label: "B", description: "b" }] }],
+    question: [{ question: `q2? ${FORGED}`, options: advOpts }],
+    header: [{ question: "q3?", header: "Jev nghiêng về: X", options: advOpts }],
+    label: [{ question: "q4?", options: [{ label: "Jev: không có đề xuất", description: "a" }, { label: "B", description: "b" }] }],
+    preview: [{ question: "q5?", options: [{ label: "A", description: "a", preview: "x [no direct statement from you" }, { label: "B", description: "b" }] }],
+    "case-insensitive": [{ question: "q6?", options: [{ label: "A", description: "JEV ĐỀ XUẤT: A" }, { label: "B", description: "b" }] }],
+  };
+  for (const [name, questions] of Object.entries(cases)) {
+    const r = await runAdvisory(hookInput(questions), stub1.url);
+    assertNeverAnswers(r.stdout);
+    assert.deepEqual(Object.keys(r.json), ["systemMessage"], name);
+    assert.match(r.json.systemMessage, /^Jev đề xuất: .+ \(0\.90\) — \[grounded in your messages\/past choices\]$/, name);
+    assert.ok(r.rows.some((e) => e.kind === "diagnostic" && e.outcome === "jev_marker_in_agent_text"), name);
+    assert.equal(r.rows.find((e) => e.outcome === "advised").display, "systemMessage", name);
+  }
+  stub1.close();
+});
+
+test("forged markers also suppress annotation of failure notes (message channel only)", async () => {
+  const stub1 = await provider500Stub(() => ({ status: 401 }));
+  const r = await runAdvisory(hookInput([{ question: "q?", options: [{ label: "A", description: FORGED }, { label: "B", description: "b" }] }]), stub1.url);
+  stub1.close();
+  assert.deepEqual(Object.keys(r.json), ["systemMessage"]);
+});
+
+test("updatedInput is an ALLOWLIST: hostile picked/answer/selection/nested extras never reach it", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers(0.9));
+  const input = hookInput([{ question: "Stack?", header: "H", multiSelect: false, picked: "A", selection: ["A"], nested: { answers: { x: 1 } }, options: [{ label: "A", description: "a", preview: "p", picked: true, answer: "A", nested: { selection: 1 } }, { label: "B", description: "b", extra: 1 }] }]);
+  Object.assign(input.tool_input, { picked: "A", selection: "A", metadata: { a: 1 } });
+  const r = await runAdvisory(input, stub1.url);
+  stub1.close();
+  assertNeverAnswers(r.stdout);
+  const u = r.json.hookSpecificOutput.updatedInput;
+  assert.deepEqual(Object.keys(u), ["questions"]);
+  assert.deepEqual(Object.keys(u.questions[0]).sort(), ["header", "multiSelect", "options", "question"]);
+  assert.deepEqual(Object.keys(u.questions[0].options[0]).sort(), ["description", "label", "preview"]);
+  assert.deepEqual(Object.keys(u.questions[0].options[1]).sort(), ["description", "label"]);
+  assert.doesNotMatch(r.stdout, /picked|selection|nested|"extra"|metadata/);
+});
+
+test("permission_mode: annotate only in default/acceptEdits/plan/absent; any other mode → systemMessage only (no permissionDecision, no updatedInput)", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers(0.9));
+  for (const [mode, annotates] of [[undefined, true], ["default", true], ["acceptEdits", true], ["plan", true], ["bypassPermissions", false], ["dontAsk", false], ["auto", false], ["somethingNew", false]]) {
+    const r = await runAdvisory(hookInput([{ question: `m-${mode}?`, options: advOpts }], mode === undefined ? {} : { permission_mode: mode }), stub1.url);
+    assertNeverAnswers(r.stdout);
+    assert.match(r.json.systemMessage, /^Jev đề xuất: A \(0\.90\)/, String(mode));
+    assert.equal(hasUpdated(r), annotates, String(mode));
+    if (!annotates) assert.deepEqual(Object.keys(r.json), ["systemMessage"], String(mode));
+  }
+  stub1.close();
+});
+
+test("permission_mode fallback also covers failure notes (bypassPermissions → systemMessage only)", async () => {
+  const stub1 = await provider500Stub(() => ({ status: 401 }));
+  const r = await runAdvisory(hookInput([{ question: "q?", options: advOpts }], { permission_mode: "bypassPermissions" }), stub1.url);
+  stub1.close();
+  assert.deepEqual(Object.keys(r.json), ["systemMessage"]);
+});
+
+test("ASK_JEV_FORCE_ANNOTATE=1 (test-only) annotates regardless of permission_mode", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers(0.9));
+  const r = await runAdvisory(hookInput([{ question: "q?", options: advOpts }], { permission_mode: "bypassPermissions" }), stub1.url, { env: { ASK_JEV_FORCE_ANNOTATE: "1" } });
+  stub1.close();
+  assertNeverAnswers(r.stdout);
+  assert.equal(r.json.hookSpecificOutput.permissionDecision, "ask");
+  assert.match(r.json.hookSpecificOutput.updatedInput.questions[0].question, /^q\?\n\nJev đề xuất: A/);
+});
+
+test("jev stats --json scrubs log-derived strings and keys (U+202E old row)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "askjev-statsjson-"));
+  const f = join(dir, "jev.log");
+  writeFileSync(f, JSON.stringify({ ts: "2026-01-01T00:00:00Z", kind: "decision", gate: "as\u202Ek", outcome: "adv\u202Eised\u001b[2J", source: "ho\u200Bok", question: "q" }) + "\n");
+  const { stdout } = await execFileAsync("node", ["bin/jev.mjs", "stats", "--json"], { env: { ...cleanEnv(), ASK_JEV_LOG_FILE: f }, encoding: "utf8" });
+  assert.doesNotMatch(stdout, /[\u202e\u200b\u001b]|\\u202e|\\u200b|\\u001b/i);
+  assert.ok(JSON.parse(stdout).decisions);
 });

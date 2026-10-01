@@ -16,6 +16,7 @@ const PREFIXES = [
   { re: /^Your questions have been answered:/, kind: "option" },
   { re: /^The user answered:/, kind: "free_text" },
 ];
+const MAX_QUESTIONS = 10;
 const THRESHOLD = Number.isFinite(Number(env("ASK_THRESHOLD", 0.8))) ? Number(env("ASK_THRESHOLD", 0.8)) : 0.8;
 const unescape = (s) => s.replace(/\\(.)/g, "$1");
 
@@ -146,7 +147,8 @@ function main() {
     const rows = adviceRows(invocationId);
     const choices = extractChoices(input.tool_response);
     const respQuestions = Array.isArray(input.tool_response?.questions) ? input.tool_response.questions : [];
-    const total = Math.max(respQuestions.length, toolQuestions.length, ...[...rows.keys()].map((i) => i + 1));
+    // AskUserQuestion có tối đa vài câu: chặn trên để một tool_input/log thù địch không biến vòng lặp thành vô hạn.
+    const total = Math.min(MAX_QUESTIONS, Math.max(respQuestions.length, toolQuestions.length, ...[...rows.keys()].map((i) => i + 1)));
     const claimed = new Set();
     const shape = responseShape(input.tool_response);
 
