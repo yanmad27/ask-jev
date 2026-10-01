@@ -246,3 +246,78 @@ test("outcome: an answer key that is only a prefix-extension of a question is NO
   assert.equal(rows[1].question_index, undefined);
   assert.equal(rows[1].agreement, "no_advice");
 });
+
+// --- Claude Code 2.1.284 (S0): tool_response is an OBJECT {questions, answers:{<question>:<label>}, annotations} ---
+const FRUIT = [{ label: "Apple", description: "red" }, { label: "Banana", description: "yellow" }];
+const s0 = (answers, questions) => ({ questions, answers, annotations: {} });
+
+test("S0 object: single pick under annotate (answers key = annotated text) → original question, recommended Banana, chosen Apple, disagree", async () => {
+  const log = tmpLog();
+  const adviceText = "Jev đề xuất: Banana (0.86) — yellow";
+  seedAdvice(log, "toolu_1", [{ question: "Which fruit?", advice: { ...advised(["Banana"]), advice_text: adviceText } }]);
+  const annotated = `Which fruit?\n\n${adviceText}`;
+  const questions = [{ question: annotated, header: "Fruit", multiSelect: false, options: [FRUIT[0], { ...FRUIT[1], description: "yellow (Jev đề xuất)" }] }];
+  await runAnswerHook(s0({ [annotated]: "Apple" }, questions), log, { tool_input: { questions } });
+  const [o] = outcomes(log);
+  assert.deepEqual([o.question_index, o.question, o.chosen, o.kind_of_answer, o.agreement], [0, "Which fruit?", ["Apple"], "option", "disagree"]);
+  assert.deepEqual(o.recommended, ["Banana"]);
+  assert.equal(o.advice_shown, true);
+  assert.deepEqual(o.options, ["Apple", "Banana"]);
+});
+
+test("S0 object: plain (unannotated) key, and no tool_input at all (index fallback via tool_response.questions)", async () => {
+  const log = tmpLog();
+  seedAdvice(log, "toolu_1", [{ question: "Which fruit?", advice: advised(["Banana"]) }]);
+  await runAnswerHook(s0({ "Which fruit?": "Banana" }, [{ question: "Which fruit?", options: FRUIT }]), log, { tool_input: { questions: [{ question: "Which fruit?", options: FRUIT }] } });
+  await runAnswerHook(s0({ "Which fruit?": "Banana" }, [{ question: "Which fruit?", options: FRUIT }]), log, {});
+  const rows = outcomes(log);
+  assert.equal(rows.length, 2);
+  for (const o of rows) assert.deepEqual([o.question, o.chosen, o.agreement, o.question_index], ["Which fruit?", ["Banana"], "agree", 0]);
+});
+
+test("S0 object: multiSelect as array and as ', '-joined string", async () => {
+  const opts = [...FRUIT, { label: "Cherry, dark", description: "c" }];
+  for (const value of [["Banana", "Cherry, dark"], "Banana, Cherry, dark"]) {
+    const log = tmpLog();
+    seedAdvice(log, "toolu_1", [{ question: "Fruits?", advice: advised(["Banana", "Apple"], 0.9) }]);
+    const questions = [{ question: "Fruits?", multiSelect: true, options: opts }];
+    await runAnswerHook(s0({ "Fruits?": value }, questions), log, { tool_input: { questions } });
+    const [o] = outcomes(log);
+    assert.deepEqual(o.chosen, ["Banana", "Cherry, dark"]);
+    assert.equal(o.agreement, "partial");
+    assert.equal(o.kind_of_answer, "option");
+  }
+});
+
+test("S0 object: free text 'Other' → free_text kind, still carries the recommendation", async () => {
+  const log = tmpLog();
+  seedAdvice(log, "toolu_1", [{ question: "Which fruit?", advice: advised(["Banana"]) }]);
+  const questions = [{ question: "Which fruit?", options: FRUIT }];
+  await runAnswerHook({ ...s0({ "Which fruit?": "dragon fruit" }, questions), annotations: { "Which fruit?": { notes: "x" } } }, log, { tool_input: { questions } });
+  const [o] = outcomes(log);
+  assert.deepEqual([o.kind_of_answer, o.agreement, o.chosen, o.question], ["free_text", "free_text", ["dragon fruit"], "Which fruit?"]);
+  assert.deepEqual(o.recommended, ["Banana"]);
+});
+
+test("S0 object: answers whose keys match no question → indexed unparsed for the expected question plus an unindexed outcome; unknown object → indexed unparsed", async () => {
+  const log = tmpLog();
+  seedAdvice(log, "toolu_1", [{ question: "Which fruit?", advice: advised(["Banana"]) }]);
+  const questions = [{ question: "Which fruit?", options: FRUIT }];
+  await runAnswerHook(s0({ "Something else entirely": "Apple" }, questions), log, { tool_input: { questions } });
+  await runAnswerHook({ weird: true }, log, { tool_input: { questions } });
+  const rows = outcomes(log);
+  assert.equal(rows.length, 3);
+  assert.deepEqual([rows[0].question_index, rows[0].kind_of_answer, rows[0].recommended], [0, "unparsed", ["Banana"]]);
+  assert.equal(rows[1].question_index, undefined);
+  assert.deepEqual([rows[2].question_index, rows[2].kind_of_answer, rows[2].response_shape], [0, "unparsed", "object:weird"]);
+});
+
+test("S0 object: failure-annotated key (advice_unavailable row with note_shown) is matched exactly", async () => {
+  const log = tmpLog();
+  const note = "Jev: không có đề xuất (lỗi 500) — bạn tự quyết";
+  seedAdvice(log, "toolu_1", [{ question: "Which fruit?", advice: { outcome: "advice_unavailable", reason: "provider_error", note_shown: true, advice_text: note } }]);
+  const annotated = `Which fruit?\n\n${note}`;
+  await runAnswerHook(s0({ [annotated]: "Apple" }, [{ question: annotated, options: FRUIT }]), log, { tool_input: { questions: [{ question: annotated, options: FRUIT }] } });
+  const [o] = outcomes(log);
+  assert.deepEqual([o.question_index, o.question, o.chosen, o.agreement, o.advice_shown], [0, "Which fruit?", ["Apple"], "no_advice", false]);
+});

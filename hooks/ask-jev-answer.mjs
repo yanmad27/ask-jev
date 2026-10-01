@@ -43,7 +43,15 @@ function responseShape(r) {
   return `${Array.isArray(r) ? "array" : "object"}:${Object.keys(r).slice(0, 10).join(",")}`;
 }
 
+// Claude Code ≥ 2.1.284 (S0): tool_response là object {questions, answers:{<câu hỏi>:<nhãn | [nhãn] | "A, B">}, annotations}.
+const isAnswersMap = (r) => r && typeof r === "object" && !Array.isArray(r) && r.answers && typeof r.answers === "object" && !Array.isArray(r.answers);
+
 function extractChoices(raw) {
+  if (isAnswersMap(raw)) {
+    return Object.entries(raw.answers)
+      .filter(([, v]) => typeof v === "string" || (Array.isArray(v) && v.every((x) => typeof x === "string")))
+      .map(([question, answer]) => ({ question, answer, prefixKind: undefined }));
+  }
   const text = responseText(raw);
   const prefix = PREFIXES.find((p) => p.re.test(text));
   if (!prefix) return [];
@@ -82,22 +90,22 @@ function adviceRows(invocationId) {
 // Kênh annotate: PreToolUse đổi văn bản câu hỏi thành `${gốc}\n\n[i/n] ${advice_text}` (n chỉ có khi > 1 câu). Dựng lại
 // đúng chuỗi đó từ dòng advice — khớp theo KHÓA CHÍNH XÁC (gốc hoặc bản chú thích đó), không bao giờ theo tiền tố.
 function suffixFor(index, total, row) {
-  return row?.outcome === "advised" && typeof row.advice_text === "string" ? `\n\n${total > 1 ? `[${index + 1}/${total}] ` : ""}${row.advice_text}` : null;
+  const shown = row?.outcome === "advised" || (row?.outcome === "advice_unavailable" && row.note_shown === true);
+  return shown && typeof row.advice_text === "string" ? `\n\n${total > 1 ? `[${index + 1}/${total}] ` : ""}${row.advice_text}` : null;
 }
 
 /** Câu hỏi GỐC của PreToolUse (tool_input có thể đã bị chú thích) + mọi khóa mà Claude Code có thể dùng làm key của answers. */
-function questionKeys(index, total, row, toolQuestion) {
+function questionKeys(index, total, row, toolQuestion, responseQuestion) {
   const suffix = suffixFor(index, total, row);
-  const given = typeof toolQuestion?.question === "string" ? toolQuestion.question : undefined;
-  let original = given;
-  if (suffix && given?.endsWith(suffix)) original = given.slice(0, -suffix.length);
-  else if (given === undefined && typeof row?.question === "string" && row.question.length < 300) original = row.question;
-  const keys = new Set();
+  const givens = [toolQuestion?.question, responseQuestion].filter((g) => typeof g === "string");
+  const stripped = suffix ? givens.find((g) => g.endsWith(suffix)) : undefined;
+  let original = stripped !== undefined ? stripped.slice(0, -suffix.length) : givens[0];
+  if (original === undefined && typeof row?.question === "string" && row.question.length < 300) original = row.question;
+  const keys = new Set(givens);
   if (original !== undefined) {
     keys.add(original);
     if (suffix) keys.add(original + suffix);
   }
-  if (given !== undefined) keys.add(given);
   return { original, keys };
 }
 
@@ -137,7 +145,8 @@ function main() {
     const toolQuestions = Array.isArray(input.tool_input?.questions) ? input.tool_input.questions : [];
     const rows = adviceRows(invocationId);
     const choices = extractChoices(input.tool_response);
-    const total = Math.max(toolQuestions.length, ...[...rows.keys()].map((i) => i + 1));
+    const respQuestions = Array.isArray(input.tool_response?.questions) ? input.tool_response.questions : [];
+    const total = Math.max(respQuestions.length, toolQuestions.length, ...[...rows.keys()].map((i) => i + 1));
     const claimed = new Set();
     const shape = responseShape(input.tool_response);
 
@@ -153,18 +162,18 @@ function main() {
         logEvent({ ...base, kind_of_answer: "unparsed", chosen: [], agreement: "unparsed", response_shape: shape });
         return;
       }
-      const multiSelect = Boolean(toolQuestion?.multiSelect) || (advised && row.recommended.length !== 1);
-      const chosen = multiSelect ? splitMulti(answer, options) : [answer];
+      const multiSelect = Array.isArray(answer) || Boolean(toolQuestion?.multiSelect) || (advised && row.recommended.length !== 1);
+      const chosen = Array.isArray(answer) ? answer : multiSelect ? splitMulti(answer, options) : [answer];
       // Khi biết danh sách option: chosen không nằm trong đó nghĩa là người gõ tự do (chọn "Other"), dù prefix của cả response nói gì.
-      const kind = options.length > 0 ? (chosen.every((x) => options.includes(x)) ? "option" : "free_text") : prefixKind;
+      const kind = options.length > 0 ? (chosen.every((x) => options.includes(x)) ? "option" : "free_text") : (prefixKind ?? "option");
       logEvent({ ...base, chosen, kind_of_answer: kind, agreement: agreementOf({ kind, recommended: base.recommended, chosen, multiSelect }) });
     };
 
     // Mỗi câu hỏi mong đợi (theo advice row / tool_input) ra đúng một dòng outcome: có đáp án khớp thì ghi lựa chọn, không thì "unparsed".
     for (let i = 0; i < total; i++) {
-      const toolQuestion = toolQuestions[i];
+      const toolQuestion = toolQuestions[i] ?? respQuestions[i];
       const row = rows.get(i);
-      const { original, keys } = questionKeys(i, total, row, toolQuestion);
+      const { original, keys } = questionKeys(i, total, row, toolQuestion, respQuestions[i]?.question);
       const at = choices.findIndex((c, k) => !claimed.has(k) && keys.has(c.question));
       if (at >= 0) claimed.add(at);
       emit(i, original ?? row?.question ?? "", toolQuestion, row, at >= 0 ? choices[at].answer : undefined, at >= 0 ? choices[at].prefixKind : undefined);
