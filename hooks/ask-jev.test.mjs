@@ -463,10 +463,10 @@ function assertNeverAnswers(stdout) {
   for (const k of ["answers", "response"]) assert.equal(Object.hasOwn(j.hookSpecificOutput?.updatedInput ?? {}, k), false);
 }
 
-test("advisory (message channel, default): top-level systemMessage only — no decision, no updatedInput", async () => {
+test("advisory (message channel, opt-in): top-level systemMessage only — no decision, no updatedInput", async () => {
   const stub1 = await provider500Stub(() => adviceAnswers(0.86));
   const input = hookInput([{ question: "Stack?", options: advOpts }]);
-  const r = await runAdvisory(input, stub1.url);
+  const r = await runAdvisory(input, stub1.url, { env: { ASK_JEV_ADVICE_CHANNEL: "message" } });
   stub1.close();
   assertNeverAnswers(r.stdout);
   assert.deepEqual(Object.keys(r.json), ["systemMessage"]);
@@ -482,11 +482,11 @@ test("advisory (message channel, default): top-level systemMessage only — no d
   assert.equal(r.rows.find((e) => e.kind === "call").invocation_id, input.tool_use_id);
 });
 
-test("advisory (annotate channel): ask + annotated questions, no answers/response, same top-level systemMessage", async () => {
+test("advisory (annotate channel, the default): ask + annotated questions, no answers/response, same top-level systemMessage", async () => {
   const stub1 = await provider500Stub(() => adviceAnswers(0.86));
   const input = hookInput([{ question: "Stack?", header: "Stack", multiSelect: false, options: advOpts }]);
   input.tool_input.extra = "kept";
-  const r = await runAdvisory(input, stub1.url, { env: { ASK_JEV_ADVICE_CHANNEL: "annotate" } });
+  const r = await runAdvisory(input, stub1.url);
   stub1.close();
   assertNeverAnswers(r.stdout);
   assert.equal(r.json.hookSpecificOutput.hookEventName, "PreToolUse");
@@ -547,27 +547,40 @@ test("advisory: agent-authored label/reason text is stripped of bidi, zero-width
   assert.doesNotMatch(r.json.systemMessage, /[‮​\u0085\n]/);
 });
 
-test("advisory: provider 500 → question untouched (no updatedInput), visible 'không có đề xuất' note, provider_error + advice_unavailable rows", async () => {
+/** Default (annotate) channel on failure: the note is appended to the question text (options untouched) AND kept in systemMessage. */
+function assertFailureAnnotated(r, question, noteRe) {
+  assert.deepEqual(Object.keys(r.json).sort(), ["hookSpecificOutput", "systemMessage"]);
+  assert.equal(r.json.hookSpecificOutput.permissionDecision, "ask");
+  const updated = r.json.hookSpecificOutput.updatedInput;
+  assert.deepEqual(Object.keys(updated), ["questions"]);
+  const [q] = updated.questions;
+  assert.match(q.question, noteRe);
+  assert.ok(q.question.startsWith(`${question}\n\n`));
+  assert.deepEqual(q.options, advOpts);
+  assert.match(r.json.systemMessage, noteRe);
+}
+
+test("advisory: provider 500 → note appended to the question (options untouched) and in systemMessage, provider_error + advice_unavailable rows", async () => {
   const stub1 = await provider500Stub(() => ({ status: 500 }));
   const input = hookInput([{ question: "Stack?", options: advOpts }]);
-  const r = await runAdvisory(input, stub1.url, { env: { ASK_JEV_ADVICE_CHANNEL: "annotate" } });
+  const r = await runAdvisory(input, stub1.url);
   stub1.close();
   assertNeverAnswers(r.stdout);
-  assert.deepEqual(Object.keys(r.json), ["systemMessage"]);
+  assertFailureAnnotated(r, "Stack?", /Jev: không có đề xuất \(lỗi 500\) — bạn tự quyết$/);
   assert.equal(r.json.systemMessage, "Jev: không có đề xuất (lỗi 500) — bạn tự quyết");
+  assert.equal(r.rows.find((e) => e.outcome === "advice_unavailable").advice_text, "Jev: không có đề xuất (lỗi 500) — bạn tự quyết");
   assert.ok(r.rows.some((e) => e.kind === "provider_error" && e.error_class === "server" && e.invocation_id === input.tool_use_id));
   const row = r.rows.find((e) => e.outcome === "advice_unavailable");
   assert.equal(row.reason, "provider_error");
   assert.equal(row.note_shown, true);
 });
 
-test("advisory: provider timeout → note, no updatedInput, advice_unavailable{timeout}", { timeout: 30_000 }, async () => {
+test("advisory: provider timeout → note in the question and systemMessage, advice_unavailable{timeout}", { timeout: 30_000 }, async () => {
   const stub1 = await provider500Stub("hang");
   const r = await runAdvisory(hookInput([{ question: "Stack?", options: advOpts }]), stub1.url);
   stub1.close();
   assertNeverAnswers(r.stdout);
-  assert.deepEqual(Object.keys(r.json), ["systemMessage"]);
-  assert.match(r.json.systemMessage, /^Jev: không có đề xuất \(lỗi .+\) — bạn tự quyết$/);
+  assertFailureAnnotated(r, "Stack?", /Jev: không có đề xuất \(lỗi .+\) — bạn tự quyết$/);
   assert.equal(r.rows.find((e) => e.outcome === "advice_unavailable").reason, "timeout");
   assert.ok(r.rows.some((e) => e.kind === "provider_error"));
 });
@@ -579,10 +592,10 @@ test("advisory: 402 billing → credits-exhausted note once per session; later f
   const first = await runAdvisory(hookInput([{ question: "One?", options: advOpts }], { session_id: session }), stub1.url, { log });
   const second = await runAdvisory(hookInput([{ question: "Two?", options: advOpts }], { session_id: session }), stub1.url, { log });
   stub1.close();
-  for (const r of [first, second]) {
-    assertNeverAnswers(r.stdout);
-    assert.deepEqual(Object.keys(r.json), ["systemMessage"]);
-  }
+  for (const r of [first, second]) assertNeverAnswers(r.stdout);
+  assertFailureAnnotated(first, "One?", /credits exhausted/);
+  assertFailureAnnotated(second, "Two?", /^Jev: không có đề xuất \(lỗi 402\)/m);
+  assert.doesNotMatch(second.json.hookSpecificOutput.updatedInput.questions[0].question, /credits/);
   assert.match(first.json.systemMessage, /credits exhausted/);
   assert.doesNotMatch(second.json.systemMessage, /credits/);
   assert.match(second.json.systemMessage, /^Jev: không có đề xuất \(lỗi 402\)/);
@@ -597,6 +610,10 @@ test("advisory: several questions failing with billing in one request → a sing
   stub1.close();
   assert.equal(r.json.systemMessage.split("\n").length, 1);
   assert.match(r.json.systemMessage, /credits exhausted/);
+  // every failed question carries the note in its own text so it is visible while choosing
+  const qs = r.json.hookSpecificOutput.updatedInput.questions;
+  assert.match(qs[0].question, /^One\?\n\n\[1\/2\] Jev: không có đề xuất \(hết credits/);
+  assert.match(qs[1].question, /^Two\?\n\n\[2\/2\] Jev: không có đề xuất \(hết credits/);
   assert.equal(r.rows.filter((e) => e.outcome === "advice_unavailable").length, 2);
 });
 
@@ -669,11 +686,11 @@ test("advisory: duplicate registration lock → exactly one advice output, one p
   assert.equal(second.rows.filter((e) => e.outcome === "advised").length, 1);
 });
 
-test("advisory: unknown ADVICE_CHANNEL falls back to the message channel", async () => {
+test("advisory: unknown ADVICE_CHANNEL falls back to the default annotate channel", async () => {
   const stub1 = await provider500Stub(() => adviceAnswers(0.9));
   const r = await runAdvisory(hookInput([{ question: "Stack?", options: advOpts }]), stub1.url, { env: { ASK_JEV_ADVICE_CHANNEL: "bogus" } });
   stub1.close();
-  assert.deepEqual(Object.keys(r.json), ["systemMessage"]);
+  assert.equal(r.json.hookSpecificOutput.permissionDecision, "ask");
 });
 
 test("advisory: the hook's provider budget + margin stays under every registered timeout", () => {
@@ -688,7 +705,7 @@ test("advisory: the hook's provider budget + margin stays under every registered
 
 test("advisory: no auto-answer path is left in the AskUserQuestion hooks", () => {
   for (const f of ["hooks/ask-jev.mjs", "hooks/ask-jev-answer.mjs"]) {
-    const src = readFileSync(f, "utf8");
+    const src = readFileSync(f, "utf8").split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
     assert.doesNotMatch(src, /permissionDecision\s*:\s*"(deny|allow)"/, f);
     assert.doesNotMatch(src, /interpretPick|interpretMulti\b|buildPickQuestions|decide\(/, f);
     assert.doesNotMatch(src, /\banswers\s*:/, f);
@@ -784,4 +801,31 @@ test("jev stats never prints terminal escapes from log-derived strings (old rows
   assert.match(stdout, /Calls:/);
   const lines = stdout.split("\n");
   assert.ok(!lines.some((l) => l.startsWith("forged line")), "an embedded newline must not forge a stats line");
+});
+
+test("advisory: silent cases stay silent in the default channel (no key, no context, missing definition, single option)", async () => {
+  const stub1 = await provider500Stub(() => adviceAnswers());
+  const q = [{ question: "Stack?", options: advOpts }];
+  const runs = [
+    await runAdvisory(hookInput(q), stub1.url, { key: null }),
+    await runAdvisory(hookInput(q, { transcript_path: "/dev/null" }), stub1.url),
+    await runAdvisory(hookInput([{ question: "M?", options: [{ label: "A" }, { label: "B", description: "b" }] }]), stub1.url),
+    await runAdvisory(hookInput([{ question: "S?", options: [{ label: "A", description: "a" }] }]), stub1.url),
+  ];
+  stub1.close();
+  for (const r of runs) assert.equal(r.stdout, "");
+});
+
+test("advisory ↔ outcome round trip: failure-annotated question keys (S0 object tool_response) match exactly and log the original question", async () => {
+  const stub1 = await provider500Stub(() => ({ status: 500 }));
+  const input = hookInput([{ question: "Pick", options: advOpts }, { question: "Pick\nmore", options: advOpts }]);
+  const r = await runAdvisory(input, stub1.url);
+  stub1.close();
+  const annotated = r.json.hookSpecificOutput.updatedInput;
+  const answers = { [annotated.questions[0].question]: "A", [annotated.questions[1].question]: "B" };
+  const child = execFileAsync("node", ["hooks/ask-jev-answer.mjs"], { env: { ...cleanEnv(), ASK_JEV_API_KEY: "vck_dummy", ASK_JEV_LOG_FILE: r.log, HOME: dirname(r.log) }, encoding: "utf8" });
+  child.child.stdin.end(JSON.stringify({ tool_name: "AskUserQuestion", session_id: input.session_id, tool_use_id: input.tool_use_id, cwd: "/repo", tool_input: annotated, tool_response: { questions: annotated.questions, answers, annotations: {} } }));
+  await child;
+  const outs = readFileSync(r.log, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "outcome");
+  assert.deepEqual(outs.map((o) => [o.question_index, o.question, o.chosen, o.kind_of_answer, o.agreement]), [[0, "Pick", ["A"], "option", "no_advice"], [1, "Pick\nmore", ["B"], "option", "no_advice"]]);
 });

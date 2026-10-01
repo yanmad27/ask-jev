@@ -7,9 +7,11 @@
  * (option, độ chắc, một dòng lý do) cho người; lỗi provider thì hiện ghi chú "không có đề xuất".
  *
  * Kênh hiển thị (ASK_JEV_ADVICE_CHANNEL):
- *   message  (mặc định) — chỉ `{"systemMessage": ...}` ở top-level; câu hỏi đi nguyên vẹn.
- *   annotate            — hookSpecificOutput {permissionDecision:"ask", updatedInput:{...tool_input, questions đã chú thích}}
- *                         + cùng systemMessage; câu hỏi chú thích thêm đề xuất, option được đề xuất đánh dấu "(Jev đề xuất)".
+ *   annotate (mặc định) — hookSpecificOutput {permissionDecision:"ask", updatedInput:{...tool_input, questions đã chú thích}}
+ *                         + cùng systemMessage; câu hỏi chú thích thêm đề xuất (hoặc ghi chú "không có đề xuất" khi lỗi),
+ *                         option được đề xuất đánh dấu "(Jev đề xuất)". Đây là kênh DUY NHẤT người dùng thấy lúc đang chọn
+ *                         (S0, Claude Code 2.1.284): systemMessage chỉ hiện trong transcript sau khi đã trả lời.
+ *   message             — chỉ `{"systemMessage": ...}` ở top-level; câu hỏi đi nguyên vẹn.
  *
  * Im lặng (không note) khi: không có API key, chưa có ngữ cảnh, câu hỏi một option, option thiếu mô tả —
  * hai trường hợp cuối vẫn ghi dòng advice_unavailable{single_option|missing_definition}.
@@ -34,7 +36,7 @@ const THRESHOLD = (() => {
   return Number.isFinite(t) ? t : 0.8;
 })();
 
-export const adviceChannel = () => (env("ADVICE_CHANNEL", "message")?.trim().toLowerCase() === "annotate" ? "annotate" : "message");
+export const adviceChannel = () => (env("ADVICE_CHANNEL", "annotate")?.trim().toLowerCase() === "message" ? "message" : "annotate");
 
 // Văn bản do agent viết: bỏ C0/C1, zero-width, bidi override/isolate, và gộp khoảng trắng/xuống dòng.
 const INVISIBLE = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]+/g;
@@ -88,17 +90,18 @@ const ANSWERING_KEY = /answer|respon|annotation|^select|^choice|^chos|^result|^o
 const dropAnswering = (obj) =>
   obj && typeof obj === "object" && !Array.isArray(obj) ? Object.fromEntries(Object.entries(obj).filter(([k]) => !ANSWERING_KEY.test(k))) : obj;
 
-function annotateQuestions(toolInput, questions, advices, lines) {
+function annotateQuestions(toolInput, questions, advices, texts) {
   return {
     ...dropAnswering(toolInput),
     questions: questions.map((raw, i) => {
       const q = { ...dropAnswering(raw), options: (raw.options ?? []).map(dropAnswering) };
       const a = advices[i];
-      if (a?.outcome !== "advised") return q;
+      if (!texts[i]) return q;
+      if (a?.outcome !== "advised") return { ...q, question: `${q.question}\n\n${texts[i]}` };
       const recommended = new Set(a.recommended);
       return {
         ...q,
-        question: `${q.question}\n\n${lines[i]}`,
+        question: `${q.question}\n\n${texts[i]}`,
         options: (q.options ?? []).map((o) => (recommended.has(o.label) ? { ...o, description: `${o.description} (Jev đề xuất)` } : o)),
       };
     }),
@@ -147,11 +150,16 @@ async function advise(input, questions, key) {
   // thuộc câu nào giành được marker, các câu billing còn lại được note đó che).
   const billingShown = [...failures.values()].some((f) => f.notice === "billing");
   const notes = new Map();
-  const noteFor = (i) => {
+  // Văn bản note của từng câu lỗi: câu billing nào cũng dùng note "credits" khi phiên này đã hiện nó (chỉ in một lần ở systemMessage).
+  const noteOf = (i) => {
     const f = failures.get(i);
     if (!f) return null;
-    if (f.errorClass === "billing" && billingShown) return f.notice === "billing" ? unavailableNote(f.errorClass, f.status, "billing") : "";
-    return unavailableNote(f.errorClass, f.status, f.notice);
+    return f.errorClass === "billing" && billingShown ? unavailableNote(f.errorClass, f.status, "billing") : unavailableNote(f.errorClass, f.status, f.notice);
+  };
+  const noteFor = (i) => {
+    const f = failures.get(i);
+    if (f?.errorClass === "billing" && billingShown && f.notice !== "billing") return "";
+    return noteOf(i);
   };
   const display = channel === "annotate" ? "updatedInput" : "systemMessage";
 
@@ -167,7 +175,8 @@ async function advise(input, questions, key) {
     const note = noteFor(i);
     const shown = Boolean(failures.has(i));
     if (note) notes.set(note, withIndex(i, note));
-    row(i, q, "advice_unavailable", { reason: a.reason, note_shown: shown });
+    // advice_text = đúng chữ người dùng thấy (ask-jev-answer dựng lại câu hỏi đã chú thích từ đây).
+    row(i, q, "advice_unavailable", { reason: a.reason, note_shown: shown, ...(shown ? { advice_text: noteOf(i), display } : {}) });
   });
 
   const messageLines = advices.flatMap((a, i) => (a.outcome === "advised" ? [withIndex(i, lines[i])] : []));
@@ -175,11 +184,12 @@ async function advise(input, questions, key) {
   const systemMessage = [...messageLines, ...shownNotes].join("\n");
   const out = {};
   if (systemMessage) out.systemMessage = systemMessage;
-  if (channel === "annotate" && advices.some((a) => a.outcome === "advised")) {
+  const texts = advices.map((a, i) => (a.outcome === "advised" ? withIndex(i, lines[i]) : failures.has(i) ? withIndex(i, noteOf(i)) : null));
+  if (channel === "annotate" && texts.some(Boolean)) {
     out.hookSpecificOutput = {
       hookEventName: "PreToolUse",
       permissionDecision: "ask",
-      updatedInput: annotateQuestions(input.tool_input, questions, advices, lines.map((l, i) => (l ? withIndex(i, l) : l))),
+      updatedInput: annotateQuestions(input.tool_input, questions, advices, texts),
     };
   }
   if (Object.keys(out).length > 0) process.stdout.write(JSON.stringify(out));

@@ -82,11 +82,11 @@ cat > "$t0" <<'EOF'
 EOF
 out="$(make_payload "$t0" '{"questions":[{"question":"Which of these files exist in this repo?","multiSelect":true,"options":[{"label":"README.md","description":"An English README file exists in this repo"},{"label":"CHANGELOG.md","description":"A CHANGELOG file exists in this repo"}]}]}' | node "$HOOK")"
 case "$out" in
-  *'"permissionDecision"'*|*'"answers"'*) ok=0; result="hook answered/blocked: $out" ;;
+  *'"permissionDecision":"deny"'*|*'"permissionDecision":"allow"'*|*'"answers"'*|*'"response"'*) ok=0; result="hook answered/blocked: $out" ;;
   *"Jev "*) ok=1; result="advice shown: $out" ;;
   *) ok=0; result="unexpected output: ${out:-<empty>}" ;;
 esac
-check "multiSelect, per-option advice" "$result" "systemMessage advice, never an answer" "$ok"
+check "multiSelect, per-option advice" "$result" "advice (systemMessage + annotated question), never an answer" "$ok"
 
 t3="$TMP/t3.jsonl"
 cat > "$t3" <<'EOF'
@@ -95,11 +95,11 @@ cat > "$t3" <<'EOF'
 EOF
 out="$(make_payload "$t3" '{"questions":[{"question":"Which date library should we use?","options":[{"label":"date-fns","description":"Already a listed dependency in this repo'"'"'s package.json"},{"label":"moment","description":"Not present anywhere in this repo, would be a new dependency"}]}]}' | node "$HOOK")"
 case "$out" in
-  *'"permissionDecision"'*|*'"answers"'*) ok=0; result="hook answered/blocked: $out" ;;
+  *'"permissionDecision":"deny"'*|*'"permissionDecision":"allow"'*|*'"answers"'*|*'"response"'*) ok=0; result="hook answered/blocked: $out" ;;
   *"Jev "*) ok=1; result="advice shown: $out" ;;
   *) ok=0; result="unexpected output: ${out:-<empty>}" ;;
 esac
-check "obvious, non-personal question" "$result" "systemMessage advice, never an answer" "$ok"
+check "obvious, non-personal question" "$result" "advice (systemMessage + annotated question), never an answer" "$ok"
 
 t4="$TMP/t4.jsonl"
 cat > "$t4" <<'EOF'
@@ -107,10 +107,10 @@ cat > "$t4" <<'EOF'
 EOF
 out="$(make_payload "$t4" '{"questions":[{"question":"Delete staging DB and push to prod now?","options":[{"label":"Yes","description":"Drop the staging database and deploy the current branch straight to production"},{"label":"No","description":"Keep staging intact, do not deploy to production"}]}]}' | node "$HOOK")"
 case "$out" in
-  *'"permissionDecision"'*|*'"answers"'*) ok=0 ;;
+  *'"permissionDecision":"deny"'*|*'"permissionDecision":"allow"'*|*'"answers"'*|*'"response"'*) ok=0 ;;
   *) ok=1 ;;
 esac
-check "irreversible/personal question is advised at most, never answered" "${out:-<empty>}" "no decision, no answers" "$ok"
+check "irreversible/personal question is advised at most, never answered" "${out:-<empty>}" "no deny/allow, no answers" "$ok"
 
 echo
 echo "== $pass passed, $fail failed =="
