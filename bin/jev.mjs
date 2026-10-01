@@ -4,7 +4,7 @@
  * in `answers` thô ra stdout. Dùng bởi skill ask-jev, hoặc trực tiếp.
  */
 import { readFileSync } from "node:fs";
-import { apiKey, askJev, logEvent, logFilePath, redactSecrets, requestError, NOT_CHAT } from "../lib/jev.mjs";
+import { apiKey, askJev, logEvent, logFilePath, redactSecrets, requestError, printable, NOT_CHAT } from "../lib/jev.mjs";
 import { truncate } from "../lib/gate.mjs";
 import { evidenceFindings, findingLine } from "../lib/cli-validate.mjs";
 import { computeStats, filterSince, parseEvents, recentDecisions, sinceMsFromSpec } from "../lib/stats.mjs";
@@ -73,7 +73,8 @@ function stats(args) {
     return;
   }
 
-  const out = (line) => process.stdout.write(`${line}\n`);
+  const out = (line) => process.stdout.write(`${line.split("\n").map(printable).join("\n")}\n`);
+  const p = printable;
   const c = summary.calls;
   const ag = summary.agreement;
   out(`Calls: ${c.total} (ok ${c.ok}, error ${c.error})  error rate ${(c.error_rate * 100).toFixed(1)}%`);
@@ -89,28 +90,30 @@ function stats(args) {
   for (const ep of entryPoints) {
     const call = c.by_source[ep] ?? { calls: 0, errors: 0, error_rate: 0 };
     const dec = summary.decisions.by_source[ep]?.decisions ?? 0;
-    out(`  ${ep.padEnd(14)} ${String(dec).padStart(9)} ${String(call.calls).padStart(6)} ${String(call.errors).padStart(7)} ${`${(call.error_rate * 100).toFixed(1)}%`.padStart(11)}`);
+    out(`  ${p(ep).padEnd(14)} ${String(dec).padStart(9)} ${String(call.calls).padStart(6)} ${String(call.errors).padStart(7)} ${`${(call.error_rate * 100).toFixed(1)}%`.padStart(11)}`);
   }
   const sd = summary.standdowns;
-  out(`\nStand-downs (not decisions, not errors): ${sd.total}${sd.total ? `  ${Object.entries(sd.by_reason).map(([r, n]) => `${r} ${n}`).join(", ")}` : ""}`);
+  out(`\nStand-downs (not decisions, not errors): ${sd.total}${sd.total ? `  ${Object.entries(sd.by_reason).map(([r, n]) => `${p(r)} ${n}`).join(", ")}` : ""}`);
   const pe = summary.provider_errors;
-  out(`Provider errors: ${pe.total}${pe.total ? `  ${Object.entries(pe.by_class).map(([k, n]) => `${k} ${n}`).join(", ")}` : ""}`);
+  out(`Provider errors: ${pe.total}${pe.total ? `  ${Object.entries(pe.by_class).map(([k, n]) => `${p(k)} ${n}`).join(", ")}` : ""}`);
   out("\nDecisions by outcome:");
   for (const [outcome, count] of Object.entries(summary.decisions.by_outcome)) {
     const pct = summary.decisions.total ? ((count / summary.decisions.total) * 100).toFixed(1) : "0.0";
-    out(`  ${outcome.padEnd(20)} ${String(count).padStart(4)}  ${pct}%`);
+    out(`  ${p(outcome).padEnd(20)} ${String(count).padStart(4)}  ${pct}%`);
   }
   out("\nBy gate:");
   for (const [gate, g] of Object.entries(summary.decisions.by_gate)) {
     const pct = g.total ? ((g.positive / g.total) * 100).toFixed(1) : "0.0";
-    const top = Object.entries(g.by_outcome).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([o, n]) => `${o} ${n}`).join(", ");
-    out(`  ${gate.padEnd(12)} calls ${String(g.total).padStart(4)}  positive ${pct.padStart(5)}%  ${top}`);
+    const top = Object.entries(g.by_outcome).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([o, n]) => `${p(o)} ${n}`).join(", ");
+    out(`  ${p(gate).padEnd(12)} calls ${String(g.total).padStart(4)}  positive ${pct.padStart(5)}%  ${top}`);
   }
-  process.stdout.write("\nRecent decisions:\n");
+  out("\nRecent decisions:");
   for (const d of recentDecisions(events, 10)) {
-    const q = d.question.length > 60 ? `${d.question.slice(0, 57)}...` : d.question;
-    const extra = d.label ? (d.confidence != null ? `${d.label} (${Number(d.confidence).toFixed(2)})` : d.label) : "";
-    process.stdout.write(`  ${d.ts}  ${d.outcome.padEnd(18)} ${q.padEnd(62)} ${extra}\n`);
+    const question = p(d.question);
+    const q = question.length > 60 ? `${question.slice(0, 57)}...` : question;
+    const label = p(d.label);
+    const extra = label ? (d.confidence != null ? `${label} (${Number(d.confidence).toFixed(2)})` : label) : "";
+    out(`  ${p(d.ts)}  ${p(d.outcome).padEnd(18)} ${q.padEnd(62)} ${extra}`);
   }
 }
 

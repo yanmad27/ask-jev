@@ -745,3 +745,43 @@ test("advisory ↔ outcome round trip: the annotated questions the hook emits ar
   const outs = readFileSync(r.log, "utf8").trim().split("\n").map((l) => JSON.parse(l)).filter((e) => e.kind === "outcome");
   assert.deepEqual(outs.map((o) => [o.question_index, o.question, o.chosen, o.agreement]), [[0, "Pick", ["A"], "agree"], [1, "Pick\nmore", ["B"], "disagree"]]);
 });
+
+test("logEvent strips terminal control characters from every string field but keeps newlines in text", async () => {
+  const { logEvent } = await import("../lib/jev.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "askjev-ctl-"));
+  const f = join(dir, "jev.log");
+  const prev = process.env.ASK_JEV_LOG_FILE;
+  process.env.ASK_JEV_LOG_FILE = f;
+  try {
+    logEvent({ kind: "outcome", question: "Pick\nmore\u001b]0;pwn\u0007\u001b[2J\u009b31m‮​", chosen: ["a\u001b[2Jb"], options: ["\u001b[31mred"], outcome: "x\u001bY", nested: { k: "\u0007v" } });
+  } finally {
+    if (prev === undefined) delete process.env.ASK_JEV_LOG_FILE;
+    else process.env.ASK_JEV_LOG_FILE = prev;
+  }
+  const raw = readFileSync(f, "utf8");
+  assert.doesNotMatch(raw, /\\u001b|\\u0007|\\u009b|\\u202e|\\u200b/i);
+  const row = JSON.parse(raw);
+  assert.equal(row.question, "Pick\nmore]0;pwn[2J31m");
+  assert.deepEqual(row.chosen, ["a[2Jb"]);
+  assert.equal(row.outcome, "xY");
+  assert.equal(row.nested.k, "v");
+});
+
+test("jev stats never prints terminal escapes from log-derived strings (old rows included), text mode", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "askjev-stats-"));
+  const f = join(dir, "jev.log");
+  const evil = "\u001b]0;pwned\u0007\u001b[2J\u009b31m‮​";
+  const rows = [
+    { ts: `2026-01-01T00:00:0${evil}Z`, kind: "decision", gate: `ask${evil}`, outcome: `advised${evil}`, question: `Q${evil}\nforged line`, label: `L${evil}`, source: `hook${evil}` },
+    { ts: "2026-01-01T00:00:01Z", kind: "outcome", question: `Q2${evil}`, chosen: [`c${evil}`], agreement: `agree${evil}`, recommended: ["x"], source: `src${evil}` },
+    { ts: "2026-01-01T00:00:02Z", kind: "standdown", reason: `paseo${evil}`, source: "hook" },
+    { ts: "2026-01-01T00:00:03Z", kind: "provider_error", error_class: `server${evil}`, source: "hook" },
+    { ts: "2026-01-01T00:00:04Z", kind: "call", status: "error", source: `cli${evil}`, latency_ms: 5 },
+  ];
+  writeFileSync(f, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  const { stdout } = await execFileAsync("node", ["bin/jev.mjs", "stats"], { env: { ...cleanEnv(), ASK_JEV_LOG_FILE: f }, encoding: "utf8" });
+  assert.doesNotMatch(stdout, /[\u0000-\u0009\u000b-\u001f\u007f-\u009f​-‏\u2028\u2029‪-‮⁠-⁤⁦-⁩﻿]/);
+  assert.match(stdout, /Calls:/);
+  const lines = stdout.split("\n");
+  assert.ok(!lines.some((l) => l.startsWith("forged line")), "an embedded newline must not forge a stats line");
+});
