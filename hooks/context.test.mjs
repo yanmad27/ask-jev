@@ -1,7 +1,7 @@
 import { cleanEnv } from "./testenv.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync, readFileSync, mkdirSync, mkdtempSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdirSync, mkdtempSync, openSync, writeSync, closeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -235,4 +235,25 @@ test("readUserPastChoices: reads schema-v2 outcome rows (with Jev's recommendati
   } finally {
     saved === undefined ? delete process.env.ASK_JEV_LOG_FILE : (process.env.ASK_JEV_LOG_FILE = saved);
   }
+});
+
+test("buildState: a huge transcript is read from its tail only — recent rows kept, bounded time", async () => {
+  const home = tmpHome();
+  const dir = mkdtempSync(join(tmpdir(), "ctx-big-"));
+  const path = join(dir, "t.jsonl");
+  const filler = JSON.stringify({ type: "user", message: { content: `filler ${"x".repeat(900)}` } }) + "\n";
+  const chunk = filler.repeat(1000);
+  const fd = openSync(path, "w");
+  writeSync(fd, JSON.stringify({ type: "user", message: { content: "VERY-FIRST-MESSAGE" } }) + "\n");
+  for (let i = 0; i < 100; i++) writeSync(fd, chunk); // ≈ 90 MB
+  writeSync(fd, JSON.stringify({ type: "user", message: { content: "the newest human request" } }) + "\n");
+  writeSync(fd, '{"type":"assistant","message":{"content":"partial line, no newline');
+  closeSync(fd);
+  const t0 = Date.now();
+  const state = await callBuildState({ transcriptPath: path, cwd: dir, sessionId: "big" }, home);
+  const elapsed = Date.now() - t0;
+  const text = JSON.stringify(state);
+  assert.match(text, /the newest human request/);
+  assert.doesNotMatch(text, /VERY-FIRST-MESSAGE/);
+  assert.ok(elapsed < 4000, `took ${elapsed}ms`);
 });

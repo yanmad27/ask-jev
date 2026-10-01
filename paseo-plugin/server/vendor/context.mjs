@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, openSync, closeSync, fstatSync, readSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
@@ -78,10 +78,33 @@ function filterRows(rows) {
   return rows.filter((row) => row && !row.isSidechain && !row.isMeta && (row.type === "user" || row.type === "assistant"));
 }
 
+// Transcript có thể to hàng trăm MB: chỉ đọc phần đuôi (hook có timeout), bỏ dòng đầu nếu bị cắt giữa chừng.
+const TRANSCRIPT_TAIL_BYTES = 2 * 1024 * 1024;
+
+function readTranscriptLines(path) {
+  const fd = openSync(path, "r");
+  try {
+    const size = fstatSync(fd).size;
+    const start = Math.max(0, size - TRANSCRIPT_TAIL_BYTES);
+    const buf = Buffer.alloc(size - start);
+    let got = 0;
+    while (got < buf.length) {
+      const n = readSync(fd, buf, got, buf.length - got, start + got);
+      if (n === 0) break;
+      got += n;
+    }
+    const lines = buf.subarray(0, got).toString("utf8").split("\n");
+    if (start > 0) lines.shift();
+    return lines;
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function readRows(path) {
   let lines;
   try {
-    lines = readFileSync(path, "utf8").split("\n");
+    lines = readTranscriptLines(path);
   } catch {
     return [];
   }
