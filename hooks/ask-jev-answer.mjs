@@ -152,7 +152,10 @@ function main() {
     const claimed = new Set();
     const shape = responseShape(input.tool_response);
 
+    let emitted = 0;
     const emit = (index, canonical, toolQuestion, row, answer, prefixKind) => {
+      if (emitted >= MAX_QUESTIONS) return; // tổng số dòng outcome mỗi invocation, kể cả đáp án lạ không khớp câu nào
+      emitted++;
       const options = Array.isArray(toolQuestion?.options) ? toolQuestion.options.map((o) => o?.label) : (row?.options ?? []);
       const advised = row?.outcome === "advised";
       const base = {

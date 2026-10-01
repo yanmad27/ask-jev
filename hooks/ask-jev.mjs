@@ -75,13 +75,26 @@ const fmtConf = (c) => Number(c).toFixed(2);
  * trên option) — agent không thể giả dòng của Jev bằng cách nhét chữ vào mô tả.
  */
 export function groundedTag(grounded) {
-  if (typeof grounded !== "number") return "";
+  if (typeof grounded !== "number") return "[grounding unavailable]";
   return grounded >= 0.5 ? "[grounded in your messages/past choices]" : "[no direct statement from you — a guess]";
 }
 
-/** "Jev đề xuất: X (0.86) — [grounded …]" (chắc) hoặc "Jev nghiêng về: X (0.55) — [grounded …]" (yếu). */
-export function adviceLine(advice) {
-  const picked = advice.recommended.length ? advice.recommended.map(clean).join(", ") : "không chọn option nào";
+const LABEL_CAP = 40;
+const shortLabel = (label) => {
+  const flat = clean(label);
+  return flat.length > LABEL_CAP ? `${flat.slice(0, LABEL_CAP - 1)}…` : flat;
+};
+
+/**
+ * 'Jev đề xuất: "X" (#2) (0.86) — [grounded …]' (chắc) hoặc 'Jev nghiêng về: …' (yếu). Nhãn do agent viết nên chỉ hiện tối đa
+ * 40 ký tự kèm số thứ tự option — không thể nhét cả một câu vào dòng mang tên Jev.
+ */
+export function adviceLine(advice, options = []) {
+  const numbered = (label) => {
+    const at = options.findIndex((o) => o?.label === label);
+    return `"${shortLabel(label)}"${at >= 0 ? ` (#${at + 1})` : ""}`;
+  };
+  const picked = advice.recommended.length ? advice.recommended.map(numbered).join(", ") : "không chọn option nào";
   const head = advice.strength === "strong" ? "Jev đề xuất" : "Jev nghiêng về";
   const reason = groundedTag(advice.grounded);
   const line = `${head}: ${picked} (${fmtConf(advice.confidence)})${reason ? ` — ${reason}` : ""}`;
@@ -122,7 +135,12 @@ function annotateQuestions(questions, advices, texts) {
 // ASK_JEV_FORCE_ANNOTATE=1 là công tắc CHỈ DÙNG ĐỂ KIỂM THỬ (không có trong README): annotate bất kể permission_mode, để chạy thật
 // xem ask+updatedInput có hiện hộp thoại ở bypassPermissions không.
 const ANNOTATE_MODES = new Set(["default", "acceptEdits", "plan"]);
-const JEV_MARKERS = ["jev đề xuất", "jev nghiêng về", "jev: không có đề xuất", "[grounded in", "[no direct statement"];
+// So khớp trên dạng đã chuẩn hoá: NFKC, bỏ zero-width/bidi/format, mọi khoảng trắng (cả NBSP) thành một dấu cách, hạ chữ.
+// Giới hạn đã biết: homoglyph ngoài NFKC (vd Cyrillic "е" thay "e") không bị bắt — đây là best effort.
+const FORMAT_CHARS = /[\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g;
+const normalizeForMarkers = (t) =>
+  t.normalize("NFKC").replace(FORMAT_CHARS, "").replace(INVISIBLE, " ").replace(/\s+/g, " ").trim().toLowerCase();
+const JEV_MARKERS = [/jev.{0,20}(đề xuất|nghiêng|recommend|suggest|pick)/, /\[grounded/, /\[no direct statement/, /\[grounding unavailable/];
 
 /** Văn bản agent đã chứa dấu hiệu của Jev (giả dòng tư vấn): không chú thích, để người phân biệt được văn bản hook với văn bản agent. */
 export function hasJevMarker(questions) {
@@ -131,7 +149,7 @@ export function hasJevMarker(questions) {
     strings.push(q?.question, q?.header);
     for (const o of q?.options ?? []) strings.push(o?.label, o?.description, o?.preview);
   }
-  return strings.some((t) => typeof t === "string" && JEV_MARKERS.some((m) => t.toLowerCase().includes(m)));
+  return strings.some((t) => typeof t === "string" && JEV_MARKERS.some((m) => m.test(normalizeForMarkers(t))));
 }
 
 async function advise(input, questions, key) {
@@ -173,7 +191,7 @@ async function advise(input, questions, key) {
   );
 
   const advices = adviseQuestions(items, { threshold: THRESHOLD });
-  const lines = advices.map((a) => (a.outcome === "advised" ? adviceLine(a) : null));
+  const lines = advices.map((a, i) => (a.outcome === "advised" ? adviceLine(a, questions[i].options ?? []) : null));
   const multi = questions.length > 1;
   const withIndex = (i, text) => (multi ? `[${i + 1}/${questions.length}] ${text}` : text);
 

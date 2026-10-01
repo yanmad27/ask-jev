@@ -328,3 +328,10 @@ test("outcome loop is clamped to 10 questions (hostile tool_input with a huge qu
   await runAnswerHook("nothing parseable", log, { tool_input: { questions } });
   assert.equal(outcomes(log).length, 10);
 });
+
+test("total outcome rows per invocation are capped at 10 even with 1000 unknown answer keys", async () => {
+  const log = tmpLog();
+  const answers = Object.fromEntries(Array.from({ length: 1000 }, (_, i) => [`unknown ${i}`, "x"]));
+  await runAnswerHook({ questions: [], answers, annotations: {} }, log, { tool_input: toolInput({ question: "Real?" }) });
+  assert.equal(outcomes(log).length, 10);
+});

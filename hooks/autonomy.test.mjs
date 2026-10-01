@@ -55,7 +55,7 @@ test("ask-jev (advisory): personal/destructive scores and autonomy mode never tu
       const out = await run("ask-jev.mjs", { ...askInput, session_id: `a-${Math.random()}`, tool_use_id: `toolu_${Math.random()}` }, `http://127.0.0.1:${server.address().port}`, mode);
       server.close();
       const parsed = JSON.parse(out);
-      assert.match(parsed.systemMessage, /^Jev đề xuất: yes \(0\.95\)/);
+      assert.match(parsed.systemMessage, /^Jev đề xuất: "yes" \(#1\) \(0\.95\)/);
       assert.equal(parsed.hookSpecificOutput.permissionDecision, "ask");
       assert.doesNotMatch(out, /"permissionDecision":"(deny|allow)"|"answers"|"response"/);
     }
