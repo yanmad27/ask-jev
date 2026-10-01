@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { hasContext, readUserPastChoices } from "../lib/context.mjs";
 
 const execFileAsync = promisify(execFile);
 const repoRoot = process.cwd();
@@ -145,4 +146,91 @@ test("buildState: ASK_JEV_STATE_CHARS is enforced on the real serialized state, 
   writeFileSync(transcript, `${JSON.stringify({ type: "user", message: { content: "hi" } })}\n`);
   const { state } = await callBuildState({ transcriptPath: transcript, cwd }, home, { ASK_JEV_STATE_CHARS: "1000" });
   assert.ok(JSON.stringify(state).length <= 1000, `serialized state must be <= 1000 chars, got ${JSON.stringify(state).length}`);
+});
+
+const jsonl = (rows) => rows.map((r) => JSON.stringify(r)).join("\n") + "\n";
+const human = (text) => ({ type: "user", message: { content: text } });
+const toolResult = (text) => ({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "t1", content: text }] } });
+const assistant = (text) => ({ type: "assistant", message: { content: [{ type: "text", text }] } });
+
+async function stateFor(rows, extraEnv = {}) {
+  const home = tmpHome();
+  const cwd = mkdtempSync(join(tmpdir(), "ctx-cwd-h-"));
+  const transcript = join(cwd, "t.jsonl");
+  writeFileSync(transcript, jsonl(rows));
+  return callBuildState({ transcriptPath: transcript, cwd }, home, extraEnv);
+}
+
+test("buildState: user messages are human-typed text only — tool_result user rows are excluded, mixed rows keep just their text parts", async () => {
+  const { state } = await stateFor([
+    human("please use pnpm"),
+    assistant("running"),
+    toolResult("TOOL-OUTPUT-SENTINEL npm install ok"),
+    { type: "user", message: { content: [{ type: "tool_result", content: "MIXED-TOOL-SENTINEL" }, { type: "text", text: "and keep tabs" }] } },
+    toolResult("LAST-TOOL-SENTINEL"),
+  ]);
+  assert.deepEqual(state.task.recent_user_messages, ["please use pnpm", "and keep tabs"]);
+  assert.equal(state.task.current_task, "and keep tabs");
+  assert.doesNotMatch(JSON.stringify(state.task), /SENTINEL/);
+});
+
+test("buildState: only tool_result user rows → no human message, current_task empty", async () => {
+  const { state } = await stateFor([toolResult("x"), toolResult("y")]);
+  assert.deepEqual(state.task.recent_user_messages, []);
+  assert.equal(state.task.current_task, "");
+});
+
+test("buildState: human messages are verbatim, each capped, total bounded", async () => {
+  const exact = "line one\n  indented \"quoted\" — verbatim ✓";
+  const big = "B".repeat(10_000);
+  const { state } = await stateFor([human(exact), human(big), human("tail")]);
+  assert.equal(state.task.recent_user_messages[0], exact);
+  assert.ok(state.task.recent_user_messages[1].length <= 3_000);
+  assert.ok(state.task.recent_user_messages[1].startsWith("BBBB"));
+  assert.ok(state.task.recent_user_messages[1].endsWith("…[truncated]"));
+  assert.ok(state.task.recent_user_messages.join("").length <= 5 * 3_000);
+  assert.equal(state.task.current_task, "tail");
+});
+
+test("buildState: latest user message > 70k chars still yields context, capped verbatim head, older turns kept, state under the cap", async () => {
+  const huge = "HEAD-OF-REQUEST " + "z".repeat(120_000);
+  const { state } = await stateFor([human("first ask"), assistant("ok first"), human("second ask"), assistant("ok second"), human(huge)]);
+  assert.equal(hasContext(state), true);
+  assert.ok(state.task.current_task.startsWith("HEAD-OF-REQUEST zzz"));
+  assert.ok(state.task.current_task.length <= 3_000);
+  assert.ok(JSON.stringify(state).length <= 70_000, `state ${JSON.stringify(state).length}`);
+  const turns = state.conversation.turns.join("\n");
+  assert.match(turns, /User: first ask/);
+  assert.match(turns, /Claude: ok second/);
+  assert.ok(state.conversation.turns.every((t) => t.length <= 4_000));
+});
+
+test("buildState: state size stays under the unchanged 70k cap with oversized everything, and ASK_JEV_STATE_CHARS still lowers it", async () => {
+  const rows = Array.from({ length: 60 }, (_, i) => [human(`q${i} ` + "w".repeat(6_000)), assistant("a".repeat(6_000))]).flat();
+  const { state, sizes } = await stateFor(rows);
+  assert.ok(JSON.stringify(state).length <= 70_000);
+  assert.ok(sizes.conversation > 0);
+  const small = await stateFor(rows, { ASK_JEV_STATE_CHARS: "20000" });
+  assert.ok(JSON.stringify(small.state).length <= 20_000);
+});
+
+test("readUserPastChoices: reads schema-v2 outcome rows (with Jev's recommendation) and legacy user_choice rows, same cwd first", () => {
+  const log = join(mkdtempSync(join(tmpdir(), "ctx-log-")), "jev.log");
+  writeFileSync(log, jsonl([
+    { kind: "user_choice", cwd: "/other", question: "legacy q", chosen: ["X"], kind_of_answer: "option" },
+    { schema: 2, kind: "outcome", cwd: "/here", question: "new q", chosen: ["B"], kind_of_answer: "option", recommended: ["A"], recommended_confidence: 0.9, agreement: "disagree" },
+    { schema: 2, kind: "outcome", cwd: "/here", question: "typed q", chosen: ["my own"], kind_of_answer: "free_text", recommended: null, agreement: "no_advice" },
+    { kind: "decision", gate: "ask", question: "not a choice" },
+  ]));
+  const saved = process.env.ASK_JEV_LOG_FILE;
+  process.env.ASK_JEV_LOG_FILE = log;
+  try {
+    const { choices } = readUserPastChoices("/here");
+    assert.deepEqual(choices.map((c) => c.question), ["typed q", "new q", "legacy q"]);
+    assert.deepEqual(choices[1], { question: "new q", chosen: ["B"], kind_of_answer: "option", jev_recommended: ["A"], agreement: "disagree" });
+    assert.deepEqual(choices[2], { question: "legacy q", chosen: ["X"], kind_of_answer: "option" });
+    assert.ok(!("jev_recommended" in choices[0]));
+  } finally {
+    saved === undefined ? delete process.env.ASK_JEV_LOG_FILE : (process.env.ASK_JEV_LOG_FILE = saved);
+  }
 });

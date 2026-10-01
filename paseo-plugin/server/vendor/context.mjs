@@ -9,6 +9,15 @@ import { env } from "./env.mjs";
 // 70k là trần có biên an toàn dưới mức đó.
 const DEFAULT_CAP = 70_000;
 const TRUNC_MARKER = "…[truncated]";
+// Tin nhắn người gõ: giữ nguyên văn, mỗi tin tối đa MESSAGE_CAP để một đoạn paste khổng lồ không đẩy hết phần còn lại ra
+// khỏi state (5 tin × 3000 = 15k, ≤ 1/4 trần 70k). Turn hội thoại cũng bị cắt TURN_CAP vì cùng lý do.
+const MESSAGE_CAP = 3_000;
+const TURN_CAP = 4_000;
+const RECENT_USER_MESSAGES = 5;
+
+function capMarked(s, n) {
+  return s.length > n ? `${s.slice(0, n - TRUNC_MARKER.length)}${TRUNC_MARKER}` : s;
+}
 
 function cap(s, n) {
   if (typeof s !== "string") return "";
@@ -56,6 +65,13 @@ function textOf(content) {
     .join(" ");
 }
 
+/** Chỉ text người gõ: tool_result (Claude Code lưu dưới dạng row type "user") và tool_use không phải lời người dùng. */
+function humanText(content) {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+  return content.filter((p) => p?.type === "text" && typeof p.text === "string").map((p) => p.text).join("\n").trim();
+}
+
 // Cùng bộ lọc cho cả row đọc từ file transcript lẫn row Paseo đưa thẳng vào (buildState's
 // transcriptRows) — sidechain/meta bỏ qua, chỉ giữ turn user/assistant thật.
 function filterRows(rows) {
@@ -87,12 +103,14 @@ function splitTurnsAndSummary(rows) {
   const summaryRow = [...rows].reverse().find((r) => r.type === "user" && r.isCompactSummary);
   const turns = plain
     .map((r) => `${r.type === "user" ? "User" : "Claude"}: ${textOf(r.message?.content)}`)
-    .filter((t) => !/^(User|Claude): *$/.test(t));
-  const userTexts = plain.filter((r) => r.type === "user").map((r) => textOf(r.message?.content)).filter(Boolean);
+    .filter((t) => !/^(User|Claude): *$/.test(t))
+    .map((t) => capMarked(t, TURN_CAP));
+  const userTexts = plain.filter((r) => r.type === "user").map((r) => humanText(r.message?.content)).filter(Boolean);
+  const recent = userTexts.slice(-RECENT_USER_MESSAGES).map((t) => capMarked(t, MESSAGE_CAP));
   return {
     turns,
-    recentUserMessages: userTexts.slice(-5),
-    currentTask: userTexts.at(-1) ?? "",
+    recentUserMessages: recent,
+    currentTask: recent.at(-1) ?? "",
     sessionSummary: summaryRow ? textOf(summaryRow.message?.content) : "",
   };
 }
@@ -196,7 +214,7 @@ function readHistory(sessionId) {
  * cùng câu hỏi, "user preferences" do LLM viết → 0.98 sai lựa chọn; 7 lựa chọn thật
  * của người dùng → 1.00 đúng). Cùng thư mục (cwd) trước, phiên khác xếp sau.
  */
-function readUserPastChoices(cwd) {
+export function readUserPastChoices(cwd) {
   let lines;
   try {
     lines = readFileSync(logFilePath(), "utf8").split("\n");
@@ -213,14 +231,18 @@ function readUserPastChoices(cwd) {
     } catch {
       continue;
     }
-    if (e.kind !== "user_choice") continue;
+    if (e.kind !== "user_choice" && e.kind !== "outcome") continue; // user_choice = schema v1, outcome = v2
     const row = { question: e.question, chosen: e.chosen, kind_of_answer: e.kind_of_answer };
+    if (e.kind === "outcome" && Array.isArray(e.recommended)) {
+      row.jev_recommended = e.recommended;
+      if (e.agreement) row.agreement = e.agreement;
+    }
     (e.cwd === cwd ? sameCwd : otherCwd).push(row);
     if (sameCwd.length + otherCwd.length >= 30) break;
   }
   const choices = [...sameCwd, ...otherCwd].slice(0, 30);
   if (choices.length === 0) return null;
-  return { _note: "What the user actually chose when asked — the strongest evidence of their preferences. Same-project choices first.", choices };
+  return { _note: "What the user actually chose when asked — the strongest evidence of their preferences. Same-project choices first. jev_recommended/agreement, when present, show what Jev advised and whether the user went along.", choices };
 }
 
 /** Lệnh/pattern người dùng đã allow/deny sẵn — Jev không được chấm risky cho cái đã allow-list. */
