@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/yanmad27/ask-jev/compare/v1.5.0...v2.0.0) (2026-10-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* **hook:** Jev advises on AskUserQuestion; the user decides ([#43](https://github.com/yanmad27/ask-jev/issues/43))
+
+### Features
+
+* **hook:** Jev advises on AskUserQuestion; the user decides ([#43](https://github.com/yanmad27/ask-jev/issues/43)) ([83cd73a](https://github.com/yanmad27/ask-jev/commit/83cd73ad13e6248b8852a2e51b5e931d635254e0))
+
 ## [1.5.0](https://github.com/yanmad27/ask-jev/compare/v1.4.0...v1.5.0) (2026-09-28)
 
 
