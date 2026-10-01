@@ -61,6 +61,8 @@ export const jevStatsRpc = defineRpc({
       error: z.number(),
       avg_latency_ms: z.number(),
       p95_latency_ms: z.number(),
+      error_rate: z.number(),
+      by_source: z.record(z.string(), z.object({ calls: z.number(), errors: z.number(), error_rate: z.number() })),
     }),
     decisions: z.object({
       total: z.number(),
@@ -68,6 +70,7 @@ export const jevStatsRpc = defineRpc({
       by_gate: z.record(z.string(), GateSummarySchema),
       positive_pct: z.number(),
       fallback_pct: z.number(),
+      by_source: z.record(z.string(), z.object({ decisions: z.number() })),
     }),
     // stats v2 (additive): `user_overrides` is a deprecated alias of `human_answers`.
     human_answers: z.number(),
@@ -109,6 +112,7 @@ export const AskJevAdviceDataSchema = z.object({
   text: z.string(),
   question: z.string(),
   question_index: z.number(),
+  question_count: z.number().optional(),
   status: z.enum(["advised", "unavailable"]),
   recommended: z.array(z.string()),
   confidence: z.number().nullable(),

@@ -3,27 +3,16 @@ import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { RpcInput } from "@getpaseo/plugin";
+import { stripUrlSecrets } from "./vendor/jev.mjs";
 import { computeStats, filterRepo, filterSince, normalizeRepo, parseEvents, recentDecisions, sinceMsFromSpec } from "../shared/stats.mjs";
 import type { JevStats } from "../shared/contracts";
 import { jevDecisionRpc, jevStatsRpc } from "../shared/contracts";
 
 const RECENT_LIMIT = 200;
 
-interface GateSummary {
-  total: number;
-  positive: number;
-  by_outcome: Record<string, number>;
-}
-
 interface StatsSummary {
-  calls: { total: number; ok: number; error: number; avg_latency_ms: number; p95_latency_ms: number };
-  decisions: {
-    total: number;
-    by_outcome: Record<string, number>;
-    by_gate: Record<string, GateSummary>;
-    positive_pct: number;
-    fallback_pct: number;
-  };
+  calls: JevStats["calls"];
+  decisions: JevStats["decisions"];
   user_overrides: number;
   human_answers: number;
   agreement: JevStats["agreement"];
@@ -77,9 +66,12 @@ export function remoteOf(cwd: string): string | null {
   let url = remotes.get(cwd);
   if (url === undefined) {
     try {
-      url = execFileSync("git", ["-C", cwd, "config", "--get", "remote.origin.url"], { timeout: 1000, stdio: ["ignore", "pipe", "ignore"] })
+      // Credentials/query/fragment are stripped here, at the source — every row, tracked request and
+      // stats payload downstream only ever sees the sanitized URL.
+      const raw = execFileSync("git", ["-C", cwd, "config", "--get", "remote.origin.url"], { timeout: 1000, stdio: ["ignore", "pipe", "ignore"] })
         .toString()
-        .trim() || null;
+        .trim();
+      url = raw ? stripUrlSecrets(raw) : null;
     } catch {
       url = null;
     }
@@ -93,8 +85,8 @@ function emptyStats(path: string, scope: string): JevStats {
     logPath: path,
     scope,
     hasLog: false,
-    calls: { total: 0, ok: 0, error: 0, avg_latency_ms: 0, p95_latency_ms: 0 },
-    decisions: { total: 0, by_outcome: {}, by_gate: {}, positive_pct: 0, fallback_pct: 0 },
+    calls: { total: 0, ok: 0, error: 0, avg_latency_ms: 0, p95_latency_ms: 0, error_rate: 0, by_source: {} },
+    decisions: { total: 0, by_outcome: {}, by_gate: {}, positive_pct: 0, fallback_pct: 0, by_source: {} },
     human_answers: 0,
     user_overrides: 0,
     agreement: { compared: 0, agree: 0, disagree: 0, partial: 0, agreement_pct: 0 },
@@ -145,10 +137,16 @@ export function getStats({ since, outcome, gate, cwd }: RpcInput<typeof jevStats
       label: d.label,
       confidence: d.confidence,
       reason: d.reason,
-      repo: d.repo,
+      repo: d.repo ? stripUrlSecrets(d.repo) : undefined,
       agent: d.agent,
     })),
   };
+}
+
+/** Older logs may hold a raw origin URL; never hand credentials to the panel. */
+function withSafeRepo(e: LogEvent): Record<string, unknown> {
+  const row = e as unknown as Record<string, unknown>;
+  return typeof row.repo === "string" ? { ...row, repo: stripUrlSecrets(row.repo) } : row;
 }
 
 /** Full raw log line for a row — keyed by event_id when the row has one, else the old ts+gate key. */
@@ -157,8 +155,8 @@ export function getDecision({ event_id, ts, gate }: RpcInput<typeof jevDecisionR
   if (!events) return null;
   if (event_id) {
     const byId = events.find((e) => e.event_id === event_id);
-    if (byId) return byId as unknown as Record<string, unknown>;
+    if (byId) return withSafeRepo(byId);
   }
   const match = events.find((e) => e.ts === ts && (e.gate ?? "") === (gate ?? ""));
-  return (match as unknown as Record<string, unknown>) ?? null;
+  return match ? withSafeRepo(match) : null;
 }

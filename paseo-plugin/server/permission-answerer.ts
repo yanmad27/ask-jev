@@ -38,8 +38,10 @@ interface PaseoQuestion {
 interface AdviceRecord {
   recommended: string[];
   confidence: number;
-  /** false once timeline.append for this advice is known to have failed — the human never saw it. */
-  shown: boolean;
+  /** Only "committed" counts as shown: timeline.append completed BEFORE the human resolved. A
+   * resolution that lands while the append is pending, or an append that fails, leaves the outcome
+   * as no_advice. */
+  state: "pending" | "committed" | "failed";
 }
 
 interface TrackedRequest {
@@ -58,24 +60,11 @@ interface TrackedRequest {
 }
 
 const INFLIGHT_KEY = Symbol.for("ask-jev.paseo.inflight");
-const BILLING_KEY = Symbol.for("ask-jev.paseo.billing-noted");
-const BILLING_NOTED_MAX = 1000;
 
 function inflightMap(): Map<string, TrackedRequest> {
   const g = globalThis as Record<symbol, unknown>;
   if (!(g[INFLIGHT_KEY] instanceof Map)) g[INFLIGHT_KEY] = new Map<string, TrackedRequest>();
   return g[INFLIGHT_KEY] as Map<string, TrackedRequest>;
-}
-
-/** Agents already told "credits exhausted" in this process. askJev's own once-per-session decision
- * (err.notice, from billingNoteShown on the log) is made before its provider_error row is written,
- * so two questions of one request failing in parallel would both be told "billing". */
-function billingNoted(): Set<string> {
-  const g = globalThis as Record<symbol, unknown>;
-  if (!(g[BILLING_KEY] instanceof Set)) g[BILLING_KEY] = new Set<string>();
-  const set = g[BILLING_KEY] as Set<string>;
-  if (set.size > BILLING_NOTED_MAX) set.clear();
-  return set;
 }
 
 function sweepStale(map: Map<string, TrackedRequest>) {
@@ -155,9 +144,15 @@ const UNAVAILABLE_NOTE: Record<string, string> = {
   provider_error: "the Jev request failed",
 };
 
+const LABEL_CAP = 60;
+const oneLine = (text: string, max: number) => cap(text.replace(/\s+/g, " ").trim(), max);
+
+/** Plain-text fallback only — the client renders recommendation, confidence and the option's own
+ * description as separate spans, so an agent-authored label/description cannot pose as Jev's
+ * confidence text. */
 function adviceText(recommended: string[], confidence: number, reason: string, strength: string | undefined): string {
   const pick = recommended.length > 0 ? recommended.map((l) => `"${l}"`).join(", ") : "no option";
-  return `Jev advice: ${pick} (${confidence.toFixed(2)}${strength === "weak" ? ", low confidence" : ""}) — ${reason}`;
+  return `Jev advice: ${pick} (${confidence.toFixed(2)}${strength === "weak" ? ", low confidence" : ""}) — option description: “${reason}”`;
 }
 
 function unavailableText(reason: string, billingNote: boolean): string {
@@ -218,41 +213,48 @@ async function adviseRequest(tracked: TrackedRequest, context: { paseo: PaseoApi
     { threshold: THRESHOLD },
   ) as Array<Advised | Unavailable>;
 
-  const noted = billingNoted();
   for (const [i, q] of questions.entries()) {
     // Re-checked per item: the human can resolve between two sequential appends.
     if (tracked.resolved) return discarded("resolved_during_append");
     const r = results[i];
-    const base = { question: q.question, question_index: i };
-    const prefix = questions.length > 1 ? `[${cap(q.question, NOTE_CAP)}] ` : "";
+    const base = { question: oneLine(q.question, NOTE_CAP), question_index: i, question_count: questions.length };
     let data: AskJevAdviceData;
     let decision: Record<string, unknown>;
+    let record: AdviceRecord | undefined;
 
     if (r.outcome === "advised") {
-      const text = prefix + adviceText(r.recommended, r.confidence, r.reason, r.strength);
-      data = { ...base, text, status: "advised", recommended: r.recommended, confidence: r.confidence, strength: r.strength as "strong" | "weak", reason: r.reason };
+      const recommended = r.recommended.map((l) => oneLine(l, LABEL_CAP));
+      const reason = oneLine(r.reason, QUESTION_CAP);
+      const text = adviceText(recommended, r.confidence, reason, r.strength);
+      data = { ...base, text, status: "advised", recommended, confidence: r.confidence, strength: r.strength as "strong" | "weak", reason };
       decision = { outcome: "advised", recommended: r.recommended, confidence: r.confidence, strength: r.strength, grounded: r.grounded, reason: r.reason, advice_text: cap(text, QUESTION_CAP), display: "timeline" };
-      tracked.advice[i] = { recommended: r.recommended, confidence: r.confidence, shown: true };
+      record = { recommended: r.recommended, confidence: r.confidence, state: "pending" };
+      tracked.advice[i] = record;
     } else {
       if (wholeFailure === "no_key") {
-        logEvent({ kind: "decision", source: "paseo", gate: "ask", mode: "advisory", outcome: "advice_unavailable", reason: "no_key", note_shown: false, question: cap(q.question, QUESTION_CAP), question_index: i, ...metaOf(tracked) });
+        logEvent({ kind: "decision", source: "paseo", gate: "ask", mode: "advisory", outcome: "advice_unavailable", reason: "no_key", note_shown: false, question: q.question, question_index: i, ...metaOf(tracked) });
         continue; // no key is configuration absence, not a failure worth a timeline item
       }
-      const billingNote = r.reason === "billing" && Boolean(outcomes[i].billingNotice) && !noted.has(tracked.agentId);
-      if (billingNote) noted.add(tracked.agentId);
-      const text = prefix + unavailableText(r.reason, billingNote);
-      data = { ...base, text, status: "unavailable", recommended: [], confidence: null, reason: r.reason };
-      decision = { outcome: "advice_unavailable", reason: r.reason, note_shown: billingNote };
+      const billingNote = r.reason === "billing" && Boolean(outcomes[i].billingNotice);
+      data = { ...base, text: unavailableText(r.reason, billingNote), status: "unavailable", recommended: [], confidence: null, reason: r.reason };
+      decision = { outcome: "advice_unavailable", reason: r.reason, note_shown: true };
     }
 
-    logEvent({ kind: "decision", source: "paseo", gate: "ask", mode: "advisory", question: cap(q.question, QUESTION_CAP), question_index: i, options: (q.options ?? []).map((o) => o.label), ...decision, ...metaOf(tracked) });
     try {
       await context.paseo.agents.ref(tracked.agentId).timeline.append({ type: "plugin", id: randomUUID(), kind: ASK_JEV_ADVICE_KIND, version: ASK_JEV_ADVICE_VERSION, data });
     } catch {
-      const record = tracked.advice[i];
-      if (record) record.shown = false;
+      if (record) record.state = "failed";
       logEvent({ kind: "diagnostic", source: "paseo", gate: "ask", outcome: "advice_append_failed", question_index: i, ...metaOf(tracked) });
+      continue;
     }
+    // The decision row is written only for advice the human could have seen: if they resolved while
+    // the append was pending, the outcome row already said no_advice and this one must not contradict it.
+    if (tracked.resolved) {
+      discarded("resolved_during_append");
+      return;
+    }
+    if (record) record.state = "committed";
+    logEvent({ kind: "decision", source: "paseo", gate: "ask", mode: "advisory", question: q.question, question_index: i, options: (q.options ?? []).map((o) => o.label), ...decision, ...metaOf(tracked) });
   }
 }
 
@@ -332,19 +334,20 @@ export function registerPermissionAnswerer(server: PluginServerContext): () => v
       runInvocation(invocationCtx(agent.id, tracked.invocationId), () => {
         tracked.questions.forEach((q, i) => {
           const chosenRaw = resolvedAnswers[q.question];
-          if (chosenRaw === undefined) return;
           const options = q.options ?? [];
           const labels = new Set(options.map((o) => o.label));
-          const chosen = typeof chosenRaw !== "string" ? [] : q.multiSelect ? parseMultiSelectAnswer(chosenRaw, options) : [chosenRaw];
-          const kind = typeof chosenRaw !== "string" ? "unparsed" : chosen.every((c) => labels.has(c)) ? "option" : "free_text";
-          const advice = tracked.advice[i]?.shown ? tracked.advice[i] : undefined;
+          // A malformed resolution (key missing, wrong type) still yields one outcome per tracked question.
+          const parsed = typeof chosenRaw === "string";
+          const chosen = !parsed ? [] : q.multiSelect ? parseMultiSelectAnswer(chosenRaw, options) : [chosenRaw];
+          const kind = !parsed ? "unparsed" : chosen.every((c) => labels.has(c)) ? "option" : "free_text";
+          const advice = tracked.advice[i]?.state === "committed" ? tracked.advice[i] : undefined;
           logEvent({
             kind: "outcome",
             source: "paseo",
             gate: "ask",
             cwd: tracked.cwd,
             question_index: i,
-            question: cap(q.question, QUESTION_CAP),
+            question: q.question,
             options: options.map((o) => o.label),
             chosen,
             kind_of_answer: kind,

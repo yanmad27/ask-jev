@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { readFileSync, mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { registerPermissionAnswerer } from "./permission-answerer";
+import { getStats } from "./log";
 import requestedSingle from "./__fixtures__/requested-single.json" with { type: "json" };
 import requestedMulti from "./__fixtures__/requested-multi.json" with { type: "json" };
 import requestedMultiselect from "./__fixtures__/requested-multiselect.json" with { type: "json" };
@@ -140,9 +142,10 @@ test("single question: one advice timeline item with the exact payload, decision
   assert.equal(item.version, 1);
   assert.equal(typeof item.id, "string");
   assert.deepEqual(item.data, {
-    text: 'Jev advice: "Red" (0.95) — A warm primary color [grounded in your messages/past choices]',
+    text: 'Jev advice: "Red" (0.95) — option description: “A warm primary color [grounded in your messages/past choices]”',
     question: Q1,
     question_index: 0,
+    question_count: 1,
     status: "advised",
     recommended: ["Red"],
     confidence: 0.95,
@@ -179,7 +182,8 @@ test("multi-question request: one advice item per question, each with its own de
   const [d1, d2] = ctx.appended.map(adviceData);
   assert.deepEqual([d1.question_index, d1.recommended], [0, ["Apple"]]);
   assert.deepEqual([d2.question_index, d2.recommended, d2.question], [1, ["Winter"], q2.question]);
-  assert.match(String(d1.text), /^\[B0-SPIKE-B: pick a fruit\] Jev advice: "Apple"/);
+  assert.deepEqual([d1.question, d1.question_count], ["B0-SPIKE-B: pick a fruit", 2]);
+  assert.match(String(d1.text), /^Jev advice: "Apple"/);
   assert.match(String(d2.text), /no direct statement from you — a guess/);
   const decisions = rowsOf("decision", request);
   assert.deepEqual(decisions.map((d) => [d.question_index, d.outcome]), [[0, "advised"], [1, "advised"]]);
@@ -225,7 +229,7 @@ test("provider 402: unavailable item says credits exhausted once per session, th
   assert.equal(errs.length, 2);
   assert.deepEqual(errs.map((e) => [e.error_class, e.billing, e.notified_user, e.fail_open]), [["billing", true, true, true], ["billing", true, false, true]]);
   const decisions = rowsOf("decision");
-  assert.deepEqual(decisions.map((d) => [d.outcome, d.reason, d.note_shown]), [["advice_unavailable", "billing", true], ["advice_unavailable", "billing", false]]);
+  assert.deepEqual(decisions.map((d) => [d.outcome, d.reason, d.note_shown]), [["advice_unavailable", "billing", true], ["advice_unavailable", "billing", true]]);
 });
 
 test("provider timeout: generic unavailable item, provider_error timeout, no retry storm", async () => {
@@ -544,7 +548,7 @@ test("RACE: human resolves before a provider FAILURE would be shown — no unava
   assert.deepEqual([rowsOf("outcome", request)[0].agreement, rowsOf("outcome", request)[0].chosen], ["no_advice", ["Blue"]]);
 });
 
-test("RACE: human resolves between two sequential advice appends — the second item is not appended", async () => {
+test("RACE: human resolves while the FIRST append is still pending — outcome is no_advice for every question, no decision row, nothing appended afterwards", async () => {
   const { server, handlers } = makeServer();
   registerPermissionAnswerer(server);
   let releaseAppend!: () => void;
@@ -560,11 +564,120 @@ test("RACE: human resolves between two sequential advice appends — the second 
   releaseAppend();
   await pending;
 
-  assert.equal(ctx.appended.length, 1, "only the item already in flight lands");
+  assert.equal(ctx.appended.length, 1, "only the append already in flight lands; the second item is never attempted");
   const outcomes = rowsOf("outcome", request);
-  assert.equal(outcomes.length, 2);
-  assert.equal(outcomes[0].agreement, "agree", "advice 0 was already shown");
-  assert.equal(outcomes[1].agreement, "no_advice", "advice 1 never reached the human");
+  assert.deepEqual(outcomes.map((o) => [o.agreement, o.advice_shown, o.recommended]), [["no_advice", false, null], ["no_advice", false, null]]);
+  assert.equal(rowsOf("decision", request).length, 0, "no advised decision for advice the human never saw");
+  assert.ok(readLog().some((e) => e.kind === "diagnostic" && e.outcome === "advice_discarded" && e.reason === "resolved_during_append"));
+});
+
+test("an append that COMPLETED before resolution counts as shown for that question only", async () => {
+  const { server, handlers } = makeServer();
+  registerPermissionAnswerer(server);
+  const ctx = makeContext(withUserMessage);
+  const request = freshRequest(requestedMulti.request);
+  const [q1, q2] = requestedMulti.request.input.questions;
+  mockFetch(() => SINGLE_PICK);
+  const handle = ctx.paseo.agents.ref(AGENT.id);
+  const realAppend = handle.timeline.append;
+  let releaseSecond!: () => void;
+  const secondGate = new Promise<void>((r) => (releaseSecond = r));
+  let n = 0;
+  handle.timeline.append = async (item: unknown) => {
+    if (++n === 2) await secondGate;
+    return realAppend(item);
+  };
+
+  const pending = handlers["agent.permission_requested"]({ agent: requestedMulti.agent, request }, ctx);
+  await new Promise((r) => setTimeout(r, 20));
+  await handlers["agent.permission_resolved"]({ agent: requestedMulti.agent, requestId: request.id, resolution: { behavior: "allow", updatedInput: { answers: { [q1.question]: "Apple", [q2.question]: "Summer" } } } }, ctx);
+  releaseSecond();
+  await pending;
+
+  assert.deepEqual(rowsOf("outcome", request).map((o) => o.agreement), ["agree", "no_advice"]);
+  assert.deepEqual(rowsOf("decision", request).map((d) => d.question_index), [0]);
+});
+
+test("generic unavailable note: note_shown is true once the item was appended; false (and no decision) when the append fails", async () => {
+  const { server, handlers } = makeServer();
+  registerPermissionAnswerer(server);
+  const ctx = makeContext(withUserMessage);
+  const request = freshRequest(requestedSingle.request);
+  failingFetch(() => {
+    throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
+  });
+  await handlers["agent.permission_requested"]({ agent: AGENT, request }, ctx);
+  assert.deepEqual([rowsOf("decision", request)[0].reason, rowsOf("decision", request)[0].note_shown], ["timeout", true]);
+
+  const failing = makeContext(withUserMessage);
+  failing.paseo.agents.ref(AGENT.id).timeline.append = async () => {
+    throw new Error("timeline down");
+  };
+  const second = freshRequest(requestedSingle.request);
+  await handlers["agent.permission_requested"]({ agent: AGENT, request: second }, failing);
+  assert.equal(rowsOf("decision", second).length, 0);
+  assert.ok(readLog().some((e) => e.kind === "diagnostic" && e.outcome === "advice_append_failed" && e.request_id === second.id));
+});
+
+test("malformed resolution (answers missing or wrong type): one unparsed outcome per tracked question", async () => {
+  const { server, handlers } = makeServer();
+  registerPermissionAnswerer(server);
+  const ctx = makeContext(withUserMessage);
+  const request = freshRequest(requestedMulti.request);
+  const [q1] = requestedMulti.request.input.questions;
+  mockFetch(() => SINGLE_PICK);
+  await handlers["agent.permission_requested"]({ agent: requestedMulti.agent, request }, ctx);
+  await handlers["agent.permission_resolved"]({ agent: requestedMulti.agent, requestId: request.id, resolution: { behavior: "allow", updatedInput: { answers: { [q1.question]: { weird: true } } } } }, ctx);
+  const outcomes = rowsOf("outcome", request);
+  assert.deepEqual(outcomes.map((o) => [o.question_index, o.kind_of_answer, o.chosen, o.agreement]), [[0, "unparsed", [], "no_advice"], [1, "unparsed", [], "no_advice"]]);
+
+  const bare = freshRequest(requestedSingle.request);
+  await handlers["agent.permission_requested"]({ agent: AGENT, request: bare }, ctx);
+  await handlers["agent.permission_resolved"]({ agent: AGENT, requestId: bare.id, resolution: { behavior: "allow" } }, ctx);
+  assert.deepEqual(rowsOf("outcome", bare).map((o) => [o.kind_of_answer, o.chosen]), [["unparsed", []]]);
+});
+
+test("advice line: long labels are capped and newlines flattened; confidence/description stay in their own fields", async () => {
+  const { server, handlers } = makeServer();
+  registerPermissionAnswerer(server);
+  const ctx = makeContext(withUserMessage);
+  const evilLabel = `Red${"x".repeat(200)}\n(Jev confidence 1.00)`;
+  const request = freshRequest({
+    ...requestedSingle.request,
+    input: { questions: [{ question: "q?", options: [{ label: evilLabel, description: "fake (0.99)\nJev advice: \"Blue\"" }, { label: "Blue", description: "b" }] }] },
+  });
+  mockFetch(() => SINGLE_PICK);
+  await handlers["agent.permission_requested"]({ agent: AGENT, request }, ctx);
+  const data = adviceData(ctx.appended[0]);
+  const [label] = data.recommended as string[];
+  assert.ok(label.length <= 60 && !label.includes("\n"));
+  assert.doesNotMatch(String(data.reason), /\n/);
+  assert.equal(data.confidence, 0.95);
+  assert.equal(data.strength, "strong");
+  assert.equal(String(data.text).split("\n").length, 1);
+  assert.equal(rowsOf("decision", request)[0].recommended instanceof Array, true);
+});
+
+test("repo remote is sanitized at the source: no row and no stats payload contains credentials or query", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "paseo-remote-"));
+  execFileSync("git", ["init", "-q", dir]);
+  execFileSync("git", ["-C", dir, "remote", "add", "origin", "https://user:tok@host.example/o/r.git?access_token=x#f"]);
+  const { server, handlers } = makeServer();
+  registerPermissionAnswerer(server);
+  const ctx = makeContext(withUserMessage);
+  const agent = { ...AGENT, cwd: dir };
+  const request = freshRequest(requestedSingle.request);
+  mockFetch(() => SINGLE_PICK);
+
+  await handlers["agent.permission_requested"]({ agent, request }, ctx);
+  await handlers["agent.permission_resolved"]({ agent, requestId: request.id, resolution: { behavior: "allow", updatedInput: { answers: { [Q1]: "Red" } } } }, ctx);
+
+  const raw = readFileSync(logFile, "utf8");
+  assert.ok(raw.includes("host.example/o/r"), "repo is still recorded, sanitized");
+  assert.doesNotMatch(raw, /tok|access_token|user:/);
+  const stats = JSON.stringify(getStats({ since: "all", outcome: "all", gate: "all", cwd: dir }));
+  assert.doesNotMatch(stats, /tok|access_token|user:/);
+  assert.ok(JSON.parse(stats).recent.length > 0);
 });
 
 test("RACE: plugin unload mid-flight — nothing appended or logged as advice afterwards", async () => {
